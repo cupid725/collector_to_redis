@@ -555,7 +555,7 @@ def monitor_service(
         if stay_time > remaining:
             stay_time = remaining
 
-        action_offset = 10.0  # 종료 10초 전에 휴먼 이벤트 실행
+        action_offset = 15.0  # 종료 15초 전에 휴먼 이벤트 실행
 
         if stay_time <= action_offset:
             print(
