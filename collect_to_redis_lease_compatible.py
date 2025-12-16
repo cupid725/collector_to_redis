@@ -475,15 +475,18 @@ def store_proxy_to_redis(r: redis.Redis, proxy_info: Dict, test_result: Dict):
     r.expire(key, PROXY_TTL_SECONDS)
 
     # alive 풀에 추가
-# lease 방식(client_from_redis_lease.py)과 호환되도록 score는 "다음 사용 가능 시각(epoch)" 개념을 사용합니다.
-# collector는 보통 0(즉시 사용 가능)로 추가만 하고, 재사용 쿨다운/백오프는 client가 score를 갱신합니다.
-member = f"{protocol}://{address}"
+    # lease 방식(client_from_redis_lease.py)과 호환되도록 score는 "다음 사용 가능 시각(epoch)" 개념을 사용합니다.
+    # collector는 보통 0(즉시 사용 가능)로 추가만 하고, 재사용 쿨다운/백오프는 client가 score를 갱신합니다.
+    member = f"{protocol}://{address}"
 
-# 이미 lease(사용 중)에 잡혀있다면 alive에 다시 넣지 않습니다(중복 배정 방지).
-if r.zscore(REDIS_ZSET_LEASE, member) is None:
-    r.zadd(REDIS_ZSET_ALIVE, {member: 0}, nx=True)  # 이미 있으면 score(쿨다운) 유지
-
-
+    # 이미 lease(사용 중)에 잡혀있다면 alive에 다시 넣지 않습니다(중복 배정 방지).
+    if r.zscore(REDIS_ZSET_LEASE, member) is None:
+        # NX로만 추가해서, client가 설정한 cooldown(score)을 collector가 덮어쓰지 않게 함
+        try:
+            r.zadd(REDIS_ZSET_ALIVE, {member: 0}, nx=True)
+        except TypeError:
+            # 구버전 redis-py 호환: execute_command로 NX 사용
+            r.execute_command("ZADD", REDIS_ZSET_ALIVE, "NX", 0, member)
 
 # ======================================================
 # 한 번 수집+테스트 실행
