@@ -1,7 +1,8 @@
 """
-naver_check_excel.py (undetected-chromedriver 버전)
+naver_check_excel.py (undetected-chromedriver 버전, ✅ 매 행마다 드라이버 재생성)
 - Excel에서 [서비스명, 사이트]를 읽어서
 - 네이버 "웹" 검색 결과(1~N페이지)에서 '사이트'가 정규화 후 정확히 매칭되는 링크가 있는지 확인
+- ✅ 매 행마다 UC 드라이버 생성/종료 (느려도 상관없다고 한 요구 반영)
 - 진행상황/탐색결과를 콘솔 로그로 출력
 - 결과를 새 엑셀로 저장
 
@@ -27,7 +28,6 @@ from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qs
 
 import pandas as pd
 
-# ✅ UC 사용
 import undetected_chromedriver as uc
 
 from selenium.webdriver.common.by import By
@@ -39,11 +39,10 @@ from selenium.webdriver.support import expected_conditions as EC
 # 사용자 옵션(여기만 수정해도 됨)
 # ----------------------------
 
-# 프록시 (원하면 값 넣고, 아니면 None)
+# ✅ 혹시 몰라서 변수로 유지
 # 예: PROXY = "socks://111.111.111.1:1111"
-# 예: PROXY = "socks5://111.111.111.1:1111"
-# 예: PROXY = "http://111.111.111.1:1111"
-PROXY: Optional[str] = None
+# 예: PROXY = None
+PROXY: Optional[str] = "socks5://37.18.73.60:5566"
 
 DEFAULT_WHERE = "web"     # 네이버 웹사이트 검색 탭
 DEFAULT_PAGES = 10
@@ -153,7 +152,7 @@ def normalize_proxy(proxy: str) -> str:
     if not p:
         return p
     if p.startswith("socks://"):
-        return "socks5://" + p[len("socks://") :]
+        return "socks5://" + p[len("socks://"):]
     return p
 
 
@@ -200,28 +199,24 @@ def load_excel_first_sheet(path: str, sheet: Optional[str]) -> tuple[pd.DataFram
 def build_driver(headless: bool = False, user_data_dir: Optional[str] = None, proxy: Optional[str] = None) -> uc.Chrome:
     options = uc.ChromeOptions()
 
-    # 헤드리스(원하면)
     if headless:
         options.add_argument("--headless=new")
 
-    # 기본 안정 옵션
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--lang=ko-KR,ko")
-    options.add_argument("--window-size=1200,900")
+    options.add_argument("--window-size=800,600")
 
-    # 프록시(옵션)
     if proxy:
         p = normalize_proxy(proxy)
         options.add_argument(f"--proxy-server={p}")
 
-    # 프로필(선택)
     if user_data_dir:
         options.add_argument(f"--user-data-dir={user_data_dir}")
 
     # ✅ UC 드라이버 생성
     driver = uc.Chrome(options=options)
-
+    driver.set_window_rect(0, 0, 800, 600)
     return driver
 
 
@@ -251,7 +246,6 @@ def extract_external_links(driver: uc.Chrome) -> list[str]:
         except Exception:
             continue
 
-    # dedupe
     seen = set()
     uniq = []
     for h in hrefs:
@@ -390,30 +384,35 @@ def main() -> int:
 
     # 프록시 결정: CLI 우선 > 상단 PROXY
     effective_proxy = args.proxy.strip() or PROXY
-    log(f"[INFO] UC Chrome start headless={args.headless} profile={(args.profile.strip() or '(none)')}")
+    log(f"[INFO] headless={args.headless} profile={(args.profile.strip() or '(none)')}")
     log(f"[INFO] PROXY={(normalize_proxy(effective_proxy) if effective_proxy else '(none)')}")
+    log("[INFO] ✅ 매 행마다 드라이버를 새로 생성/종료합니다.")
 
-    driver = build_driver(
-        headless=args.headless,
-        user_data_dir=(args.profile.strip() or None),
-        proxy=effective_proxy,
-    )
+    total = len(df)
+    for idx, row in df.iterrows():
+        service = str(row.get(col_service, "")).strip()
+        site = str(row.get(col_site, "")).strip()
+        base_search_url = str(row.get(col_search, "")).strip() if col_search else ""
 
-    try:
-        total = len(df)
-        for idx, row in df.iterrows():
-            service = str(row.get(col_service, "")).strip()
-            site = str(row.get(col_site, "")).strip()
-            base_search_url = str(row.get(col_search, "")).strip() if col_search else ""
+        log("=" * 80)
+        log(f"[ROW {idx+1}/{total}] 서비스명='{service}'  사이트='{site}'")
 
-            log("=" * 80)
-            log(f"[ROW {idx+1}/{total}] 서비스명='{service}'  사이트='{site}'")
+        if not service or not site or site.lower() == "nan":
+            log("    [SKIP] 서비스명/사이트 누락")
+            df.at[idx, "네이버노출"] = "SKIP"
+            df.at[idx, "에러"] = "서비스명/사이트 누락"
+            continue
 
-            if not service or not site or site.lower() == "nan":
-                log("    [SKIP] 서비스명/사이트 누락")
-                df.at[idx, "네이버노출"] = "SKIP"
-                df.at[idx, "에러"] = "서비스명/사이트 누락"
-                continue
+        driver: Optional[uc.Chrome] = None
+        info: FoundInfo
+
+        try:
+            log("    [DRIVER] create")
+            driver = build_driver(
+                headless=args.headless,
+                user_data_dir=(args.profile.strip() or None),
+                proxy=effective_proxy,
+            )
 
             info = check_one_query(
                 driver=driver,
@@ -426,27 +425,35 @@ def main() -> int:
                 verbose=args.verbose,
             )
 
-            df.at[idx, "네이버노출"] = "Y" if info.found else "N"
-            df.at[idx, "노출페이지"] = info.found_page if info.found_page is not None else ""
-            df.at[idx, "노출순위(대략)"] = info.found_rank if info.found_rank is not None else ""
-            df.at[idx, "노출링크"] = info.found_url if info.found_url else ""
-            df.at[idx, "체크페이지수"] = info.checked_pages
-            df.at[idx, "체크시각"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            df.at[idx, "에러"] = info.error or ""
+        except Exception as e:
+            log(f"    [DRIVER ERROR] {type(e).__name__}: {e}")
+            info = FoundInfo(found=False, checked_pages=0, error=f"DriverError: {type(e).__name__}: {e}")
 
-            log(f"[ROW {idx+1}] RESULT = {'FOUND' if info.found else 'NOT FOUND'} / checked_pages={info.checked_pages} / err={info.error or '-'}")
+        finally:
+            if driver is not None:
+                try:
+                    log("    [DRIVER] quit")
+                    driver.quit()
+                except Exception:
+                    pass
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = args.out.strip() or f"naver_check_results_{ts}.xlsx"
-        df.to_excel(out_path, index=False)
-        log(f"\n[OK] 저장 완료: {out_path}")
+        df.at[idx, "네이버노출"] = "Y" if info.found else "N"
+        df.at[idx, "노출페이지"] = info.found_page if info.found_page is not None else ""
+        df.at[idx, "노출순위(대략)"] = info.found_rank if info.found_rank is not None else ""
+        df.at[idx, "노출링크"] = info.found_url if info.found_url else ""
+        df.at[idx, "체크페이지수"] = info.checked_pages
+        df.at[idx, "체크시각"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        df.at[idx, "에러"] = info.error or ""
 
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
+        log(f"[ROW {idx+1}] RESULT = {'FOUND' if info.found else 'NOT FOUND'} / checked_pages={info.checked_pages} / err={info.error or '-'}")
 
+        # (선택) 행 사이 쉬는 시간 - 너무 빠르면 네이버가 싫어함
+        time.sleep(random.uniform(0.8, 2.0))
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = args.out.strip() or f"naver_check_results_{ts}.xlsx"
+    df.to_excel(out_path, index=False)
+    log(f"\n[OK] 저장 완료: {out_path}")
     return 0
 
 
