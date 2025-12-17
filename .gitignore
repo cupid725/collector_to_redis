@@ -1,2 +1,5 @@
 .venv
 .venv\
+*.xlsx
+*.log
+naver_monitor_out

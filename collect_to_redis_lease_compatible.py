@@ -248,7 +248,8 @@ def fetch_all_proxies() -> List[Dict]:
     # 실제 requests 사용 시에는 HTTP 프록시로 처리(아래 build_requests_proxies 참고).
     vakhov_https = fetch_plain_proxy_list(VAKHOV_HTTPS_URL, "https", "vakhov_https")
 
-    raw = http_proxies + s5_speedx + s5_proxifly + vakhov_s4 + vakhov_s5 + vakhov_http + vakhov_https
+    #raw = http_proxies + s5_speedx + s5_proxifly + vakhov_s4 + vakhov_s5 + vakhov_http + vakhov_https
+    raw = vakhov_s4 + vakhov_s5 + vakhov_http + vakhov_https + http_proxies + s5_speedx + s5_proxifly  
 
     # protocol + address 기준 중복 제거
     unique: Dict[tuple, Dict] = {}
