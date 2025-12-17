@@ -350,6 +350,11 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
     }
     options.add_experimental_option("prefs", prefs)
 
+    # --- Startup: 첫 탭을 확실히 about:blank로 시작 (새 프로필이어도 New Tab(구글처럼 보이는 화면) 잠깐 뜨는 걸 줄임)
+    options.add_argument("--homepage=about:blank")
+    # Chrome은 마지막 인자로 URL을 주면 첫 탭을 그 URL로 엽니다.
+    options.add_argument("about:blank")
+
     if HEADLESS:
         options.add_argument("--headless=new")
     if proxy:
@@ -509,6 +514,12 @@ def monitor_service(
         if not driver:
             print(f"[Bot-{index}] ❌ 드라이버 생성 실패.")
             return
+
+        # (디버그) 브라우저가 처음 어떤 URL로 떠 있는지 확인
+        try:
+            print(f"[Bot-{index}] (debug) initial url={driver.current_url} title={driver.title!r}")
+        except Exception:
+            pass
 
         # 창 위치 슬롯별로 배치 (겹치지 않게)
         try:
