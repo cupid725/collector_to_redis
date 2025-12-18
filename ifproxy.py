@@ -15,7 +15,7 @@ PROXY = "http://36.110.143.55:8080"    #Singapore (SG)       | Type: Datacenter
 #PROXY = "socks5://185.54.178.193:1080"
 #PROXY = "socks5://192.168.140.219:37919"
 #PROXY = "http://88.99.26.62:3128"
-PROXY = "socks5://37.18.73.60:5566"
+PROXY = "http://95.66.138.21:8880"
 
 # 같은 프록시로 몇 번 테스트할지
 NUM_RUNS = 5
