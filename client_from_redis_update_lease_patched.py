@@ -376,6 +376,10 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
         "intl.accept_languages": random.choice(profile["accept_languages"]),
     }
     options.add_experimental_option("prefs", prefs)
+    
+    options.add_argument("--disable-quic")
+    options.add_argument("--disable-features=NetworkService,NetworkServiceInProcess")
+
 
     # Startup 설정
     options.add_argument("--homepage=about:blank")
@@ -501,13 +505,13 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
 
     # ✅ 네트워크 조건 시뮬레이션 (사람처럼 보이게)
     try:
-        driver.execute_cdp_cmd('Network.enable', {})
-        driver.execute_cdp_cmd('Network.emulateNetworkConditions', {
-            'offline': False,
-            'downloadThroughput': random.uniform(1.0, 2.5) * 1024 * 1024,  # 1-2.5 Mbps
-            'uploadThroughput': random.uniform(500, 1000) * 1024,  # 500-1000 Kbps
-            'latency': random.randint(20, 150),  # 20-150ms
-        })
+        #driver.execute_cdp_cmd('Network.enable', {})
+        #driver.execute_cdp_cmd('Network.emulateNetworkConditions', {
+        #    'offline': False,
+        #    'downloadThroughput': random.uniform(1.0, 2.5) * 1024 * 1024,  # 1-2.5 Mbps
+        #    'uploadThroughput': random.uniform(500, 1000) * 1024,  # 500-1000 Kbps
+        #    'latency': random.randint(20, 150),  # 20-150ms
+        #})
         print(f"[Driver-{thread_id}] 🌐 네트워크 조건 시뮬레이션 활성화")
     except Exception as e:
         print(f"[Driver-{thread_id}] ⚠️ 네트워크 시뮬레이션 실패: {e}")
@@ -625,6 +629,120 @@ def click_youtube_consent_accept_all(driver, timeout=8):
         print(f"[Consent] ⚠ 예외 발생: {e}")
         return False
 
+def is_driver_alive(driver) -> bool:
+    """
+    사용자가 창을 닫았거나(윈도우 핸들 없음),
+    세션이 죽었거나(InvalidSessionId 등),
+    크롬이 강종된 경우를 최대한 빨리 감지.
+    """
+    try:
+        handles = driver.window_handles  # 창 닫히면 [] 또는 예외
+        if not handles:
+            return False
+
+        # 세션/렌더러 죽었는지 가볍게 한번 찔러보기
+        driver.execute_script("return 1;")
+        return True
+    except (InvalidSessionIdException, NoSuchWindowException, WebDriverException):
+        return False
+
+
+def smart_wait(driver, stop_event, timeout: float, index: int, check_interval: float = 0.5) -> bool:
+    """
+    timeout 동안 대기하되, check_interval마다 stop_event/브라우저 생존을 체크.
+    - True: 정상적으로 timeout까지 기다림
+    - False: stop_event 또는 브라우저 종료 감지로 조기 중단
+    """
+    end = time.time() + max(0.0, float(timeout))
+
+    while True:
+        if stop_event.is_set():
+            return False
+
+        if not is_driver_alive(driver):
+            print(f"[Bot-{index}] 🛑 브라우저/세션 종료 감지 -> 대기 중단")
+            # 다른 쓰레드도 같이 멈추게 하고 싶으면 아래를 켜도 됨
+            # stop_event.set()
+            return False
+
+        remaining = end - time.time()
+        if remaining <= 0:
+            return True
+
+        stop_event.wait(timeout=min(check_interval, remaining))
+
+CHROME_ERROR_URL_PREFIXES = (
+    "chrome-error://",        # 크로미움 에러 페이지
+    "chrome://error",         # 일부 케이스
+)
+
+ERROR_TEXT_MARKERS = (
+    "This site can’t be reached",
+    "This site can't be reached",
+    "ERR_TIMED_OUT",
+    "net::ERR_",
+)
+
+def _page_looks_like_error(driver) -> bool:
+    # 1) chrome 자체 에러 페이지 URL
+    try:
+        cur = (driver.current_url or "").lower()
+        if any(cur.startswith(p) for p in CHROME_ERROR_URL_PREFIXES):
+            return True
+    except Exception:
+        pass
+
+    # 2) 화면 텍스트로 감지 (가장 확실)
+    try:
+        body = driver.find_element(By.TAG_NAME, "body")
+        txt = (body.text or "")
+        if any(m in txt for m in ERROR_TEXT_MARKERS):
+            return True
+    except Exception:
+        pass
+
+    # 3) page_source로 추가 감지 (body.text가 비는 경우 대비)
+    try:
+        src = driver.page_source or ""
+        if any(m in src for m in ERROR_TEXT_MARKERS):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def safe_get(driver, url: str, index: int, page_load_timeout: float = 30.0) -> bool:
+    """
+    True면 '정상 페이지'로 간주, False면 접속 실패/타임아웃/에러페이지.
+    """
+    try:
+        driver.set_page_load_timeout(page_load_timeout)
+    except Exception:
+        pass
+
+    try:
+        driver.get(url)
+    except TimeoutException:
+        print(f"[Bot-{index}] ⚠️ pageLoadTimeout 발생 (driver.get)")
+        return False
+    except WebDriverException as e:
+        msg = str(e)
+        # net::ERR_* 류는 대부분 여기로 옴
+        if "net::ERR_" in msg or "ERR_TIMED_OUT" in msg or "timeout" in msg.lower():
+            print(f"[Bot-{index}] ⚠️ WebDriverException (네트워크/타임아웃): {msg[:160]}")
+            return False
+        # 그 외는 그대로 실패 처리(원하면 raise)
+        print(f"[Bot-{index}] ⚠️ WebDriverException: {msg[:160]}")
+        return False
+
+    # 예외가 안 나도 에러 페이지일 수 있음
+    if _page_looks_like_error(driver):
+        print(f"[Bot-{index}] ⚠️ 에러 페이지 감지 (ERR_TIMED_OUT 등)")
+        return False
+
+    return True
+        
 # ===================== 메인 워커 =====================
 def monitor_service(
     url: str,
@@ -713,6 +831,11 @@ def monitor_service(
 
         try:
             driver.get(url)
+            #ok = safe_get(driver, url, index, page_load_timeout=90)
+            #if not ok:
+            #    print(f"[Bot-{index}] ⚠️ Get 실패(타임아웃/에러페이지). 다음 프록시/재시도 처리.")
+            #    return
+            
             clicked = click_youtube_consent_accept_all(driver)
 
             if not clicked:
@@ -769,11 +892,15 @@ def monitor_service(
             except Exception:
                 pass
             human_scroll(driver)
-            stop_event.wait(timeout=stay_time)
+            #stop_event.wait(timeout=stay_time)
+            if not smart_wait(driver, stop_event, stay_time, index):
+                return
         else:
             pre_wait = stay_time - action_offset
             print(f"[Bot-{index}] 체류 시작 (총 {stay_time:.1f}초, {pre_wait:.1f}초 후 휴먼 이벤트 실행, 이후 15초 유지)")
-            stop_event.wait(timeout=pre_wait)
+            #stop_event.wait(timeout=pre_wait)
+            if not smart_wait(driver, stop_event, stay_time, index):
+                return
             if stop_event.is_set():
                 return
             try:
@@ -785,7 +912,9 @@ def monitor_service(
             remaining2 = hard_deadline - time.time()
             tail = min(action_offset, max(0, remaining2))
             if tail > 0:
-                stop_event.wait(timeout=tail)
+                #stop_event.wait(timeout=tail)
+                if not smart_wait(driver, stop_event, stay_time, index):
+                    return
 
         print(f"[Bot-{index}] 모니터링 정상 종료.")
 
