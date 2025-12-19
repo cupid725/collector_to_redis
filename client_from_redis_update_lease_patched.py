@@ -203,16 +203,16 @@ except Exception as e:
 
 # ===================== 공통 설정 =====================
 TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
-#TARGET_URL = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
+TARGET_URL = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
 COMMAND_TIMEOUT = 300
 LOAD_TIMEOUT = COMMAND_TIMEOUT
-ENSURE_TIMEOUT = 300
+ENSURE_TIMEOUT = 420
 BROWSE_MAX_SECONDS = ENSURE_TIMEOUT
-STAY_DURATION = 600
+STAY_DURATION = 300
 WINDOW_WIDTH = 800
 WINDOW_HEIGHT = 700
-NUM_BROWSERS = 1
+NUM_BROWSERS = 2
 HEADLESS = False
 
 WAIT_WHEN_NO_PROXY_SECONDS = 60
@@ -347,13 +347,20 @@ def normalize_proxy_for_chrome(proxy: Optional[str]) -> Optional[str]:
 
 def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thread_id: int = 0):
     """
-    드라이버와 임시 디렉토리 경로를 반환
+    향상된 스텔스 드라이버 생성 (region_profiles.json의 user_agents 활용)
     Returns: (driver, temp_dir) 튜플
     """
     options = uc.ChromeOptions()
 
     temp_dir = tempfile.mkdtemp(prefix=f"monitor_profile_{thread_id}_")
     options.add_argument(f"--user-data-dir={temp_dir}")
+    
+    # ✅ User-Agent 설정 (region_profiles.json에서)
+    if "user_agents" in profile:
+        ua = random.choice(profile["user_agents"])
+        options.add_argument(f"--user-agent={ua}")
+        print(f"[Driver-{thread_id}] 🎭 User-Agent: {ua[:80]}...")
+    
     options.add_argument(f"--timezone-id={profile['timezone']}")
     options.add_argument(f"--lang={profile['locale']}")
 
@@ -361,26 +368,29 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
         "profile.default_content_setting_values.notifications": 2,
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
+        # ✅ WebRTC 강화 차단
         "webrtc.ip_handling_policy": "disable_non_proxied_udp",
         "webrtc.multiple_routes_enabled": False,
         "webrtc.nonproxied_udp_enabled": False,
+        "webrtc.udp.max_packet_size": 0,
         "intl.accept_languages": random.choice(profile["accept_languages"]),
     }
     options.add_experimental_option("prefs", prefs)
 
-    # --- Startup: 첫 탭을 확실히 about:blank로 시작 (새 프로필이어도 New Tab(구글처럼 보이는 화면) 잠깐 뜨는 걸 줄임)
+    # Startup 설정
     options.add_argument("--homepage=about:blank")
-    # Chrome은 마지막 인자로 URL을 주면 첫 탭을 그 URL로 엽니다.
     options.add_argument("about:blank")
 
     if HEADLESS:
         options.add_argument("--headless=new")
+    
     if proxy:
         proxy_for_chrome = normalize_proxy_for_chrome(proxy)
         if proxy_for_chrome != proxy:
             print(f"[Proxy] 🔧 normalize: {proxy}  →  {proxy_for_chrome}")
         options.add_argument(f"--proxy-server={proxy_for_chrome}")
 
+    # ✅ 자동화 감지 우회 옵션 강화
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--no-first-run")
     options.add_argument(f"--window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}")
@@ -403,7 +413,6 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
 
         except Exception as e:
             print(f"[ERR] Driver creation failed: {e}")
-            # 드라이버 생성 실패 시 temp 디렉토리 정리
             try:
                 if os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir)
@@ -411,20 +420,133 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
                 pass
             return None, None
 
+    # ✅ CDP 명령으로 강력한 자동화 감지 우회
     try:
         driver.execute_cdp_cmd(
             "Page.addScriptToEvaluateOnNewDocument",
             {
                 "source": """
-                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                    // Navigator 속성 재정의
+                    Object.defineProperty(navigator, 'webdriver', { 
+                        get: () => undefined 
+                    });
+                    
+                    Object.defineProperty(navigator, 'plugins', { 
+                        get: () => [1, 2, 3, 4, 5] 
+                    });
+                    
+                    Object.defineProperty(navigator, 'languages', { 
+                        get: () => ['ko-KR', 'ko', 'en-US', 'en'] 
+                    });
+                    
+                    // Chrome 객체 추가 (자동화 도구 아님을 위장)
+                    window.chrome = { 
+                        runtime: {},
+                        loadTimes: function() {},
+                        csi: function() {},
+                        app: {}
+                    };
+                    
+                    // Permissions 쿼리 오버라이드
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                    
+                    // WebGL Vendor 정보 랜덤화 (핑거프린트 방지)
+                    const getParameter = WebGLRenderingContext.prototype.getParameter;
+                    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                        if (parameter === 37445) {
+                            const vendors = ['Intel Inc.', 'Google Inc.', 'Mozilla'];
+                            return vendors[Math.floor(Math.random() * vendors.length)];
+                        }
+                        if (parameter === 37446) {
+                            const renderers = [
+                                'Intel Iris OpenGL Engine',
+                                'ANGLE (Intel, Intel(R) HD Graphics 630 Direct3D11 vs_5_0 ps_5_0)',
+                                'Mesa DRI Intel(R) HD Graphics'
+                            ];
+                            return renderers[Math.floor(Math.random() * renderers.length)];
+                        }
+                        return getParameter.apply(this, [parameter]);
+                    };
+                    
+                    // Canvas Fingerprinting 방지
+                    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                    HTMLCanvasElement.prototype.toDataURL = function() {
+                        if (Math.random() < 0.1) {
+                            const context = this.getContext('2d');
+                            if (context) {
+                                context.fillStyle = 'rgba(' + 
+                                    Math.floor(Math.random()*255) + ',' +
+                                    Math.floor(Math.random()*255) + ',' +
+                                    Math.floor(Math.random()*255) + ',0.01)';
+                                context.fillRect(0, 0, 1, 1);
+                            }
+                        }
+                        return originalToDataURL.apply(this, arguments);
+                    };
+                    
+                    // console.debug 숨기기
+                    console.debug = () => {};
                 """
             },
         )
-    except Exception:
-        pass
+        print(f"[Driver-{thread_id}] ✅ 자동화 감지 우회 스크립트 주입 완료")
+        
+    except Exception as e:
+        print(f"[Driver-{thread_id}] ⚠️ CDP 스크립트 주입 실패: {e}")
+
+    # ✅ 네트워크 조건 시뮬레이션 (사람처럼 보이게)
+    try:
+        driver.execute_cdp_cmd('Network.enable', {})
+        driver.execute_cdp_cmd('Network.emulateNetworkConditions', {
+            'offline': False,
+            'downloadThroughput': random.uniform(1.0, 2.5) * 1024 * 1024,  # 1-2.5 Mbps
+            'uploadThroughput': random.uniform(500, 1000) * 1024,  # 500-1000 Kbps
+            'latency': random.randint(20, 150),  # 20-150ms
+        })
+        print(f"[Driver-{thread_id}] 🌐 네트워크 조건 시뮬레이션 활성화")
+    except Exception as e:
+        print(f"[Driver-{thread_id}] ⚠️ 네트워크 시뮬레이션 실패: {e}")
 
     return driver, temp_dir
+
+
+# ===================== 프록시 품질 테스트 함수 (선택적 사용) =====================
+def test_proxy_quality(driver, thread_id: int = 0):
+    """
+    프록시 IP 및 감지 여부 확인 (디버깅용)
+    실제 운영시에는 호출하지 않는 것을 권장 (시간 소요)
+    """
+    try:
+        print(f"[Bot-{thread_id}] 🔍 프록시 품질 테스트 시작...")
+        
+        # 1. 현재 IP 확인
+        driver.get("https://api.ipify.org?format=json")
+        time.sleep(2)
+        try:
+            body = driver.find_element(By.TAG_NAME, "body").text
+            print(f"[Bot-{thread_id}] 📍 Current IP: {body}")
+        except:
+            pass
+        
+        # 2. WebRTC 누수 확인 (간단 버전)
+        driver.execute_script("""
+            var myPeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection;
+            if (myPeerConnection) {
+                console.log('WebRTC is available');
+            } else {
+                console.log('WebRTC is blocked');
+            }
+        """)
+        
+        print(f"[Bot-{thread_id}] ✅ 프록시 품질 테스트 완료")
+        
+    except Exception as e:
+        print(f"[Bot-{thread_id}] ⚠️ 프록시 테스트 실패: {e}")
 
 # ===================== 페이지 로딩/에러 감지 =====================
 def _page_really_ready(driver):
@@ -513,12 +635,11 @@ def monitor_service(
 ):
     driver = None
     temp_dir = None
-
     session_ok = False
 
     try:
         if not REGION_PROFILES:
-            print(f"[Bot-{index}] ❌ REGION_PROFILES가 비어 있습니다. region_profiles.json 로드를 확인하세요.")
+            print(f"[Bot-{index}] ❌ REGION_PROFILES가 비어 있습니다.")
             return
 
         region = random.choice(list(REGION_PROFILES.keys()))
@@ -537,13 +658,16 @@ def monitor_service(
             print(f"[Bot-{index}] ❌ 드라이버 생성 실패.")
             return
 
-        # (디버그) 브라우저가 처음 어떤 URL로 떠 있는지 확인
+        # (선택) 프록시 품질 테스트 - 디버깅시에만 활성화
+        # test_proxy_quality(driver, index)
+
+        # 디버그: 브라우저 초기 상태
         try:
             print(f"[Bot-{index}] (debug) initial url={driver.current_url} title={driver.title!r}")
         except Exception:
             pass
 
-        # 창 위치 슬롯별로 배치 (겹치지 않게)
+        # 창 위치 설정
         try:
             slot = index % max(1, NUM_BROWSERS)
             base_x = 50
@@ -555,7 +679,7 @@ def monitor_service(
                 driver.set_window_position(x, y)
                 print(f"[Bot-{index}] 🪟 창 위치 설정: ({x}, {y}) [slot {slot}]")
         except Exception as e:
-            print(f"[Bot-{index}] ⚠ 창 위치 설정 실패: {e}")
+            print(f"[Bot-{index}] ⚠️ 창 위치 설정 실패: {e}")
 
         # 초기 페이지
         try:
@@ -567,15 +691,20 @@ def monitor_service(
 
         reset_browser_data_in_session(driver)
 
-        # Referer 설정
+        # ✅ Referer 설정 (region_profiles.json에서)
         referer = random.choice(profile["referers"])
         try:
             driver.execute_cdp_cmd(
                 "Network.setExtraHTTPHeaders", {"headers": {"Referer": referer}}
             )
-            print(f"[Bot-{index}] Referer: {referer}")
+            print(f"[Bot-{index}] 🔗 Referer: {referer}")
         except Exception as e:
-            print(f"[Bot-{index}] ⚠ Referer 설정 실패: {e}")
+            print(f"[Bot-{index}] ⚠️ Referer 설정 실패: {e}")
+
+        # ✅ 랜덤 대기 후 타겟 페이지 접속 (더 사람처럼)
+        pre_nav_delay = random.uniform(1.0, 3.0)
+        print(f"[Bot-{index}] ⏳ 접속 전 {pre_nav_delay:.1f}초 대기...")
+        time.sleep(pre_nav_delay)
 
         # 타겟 페이지 접속
         print(f"[Bot-{index}] 접속 요청: {url}")
@@ -692,7 +821,7 @@ def monitor_service(
             if session_ok:
                 reset_fail(redis_client, proxy_member)
                 release_proxy(redis_client, proxy_member, cooldown_seconds=COOLDOWN_SUCCESS)
-                print(f"[Bot-{index}] 🔁 proxy released (ok): {proxy_member}")
+                print(f"[Bot-{index}] 🔓 proxy released (ok): {proxy_member}")
             else:
                 fails = inc_fail(redis_client, proxy_member)
                 if fails >= MAX_FAIL:
@@ -701,7 +830,7 @@ def monitor_service(
                 else:
                     cooldown = COOLDOWN_FAIL_BASE + random.randint(0, max(0, COOLDOWN_FAIL_JITTER))
                     release_proxy(redis_client, proxy_member, cooldown_seconds=cooldown)
-                    print(f"[Bot-{index}] 🔁 proxy released (fail={fails}, cooldown={cooldown}s): {proxy_member}")
+                    print(f"[Bot-{index}] 🔓 proxy released (fail={fails}, cooldown={cooldown}s): {proxy_member}")
 
 # ===================== 임시 디렉토리 정리 (전역, 예비용) =====================
 def cleanup_temp_dirs():

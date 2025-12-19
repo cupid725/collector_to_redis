@@ -73,7 +73,7 @@ if ALLOW_HTTP_FALLBACK:
 CONNECT_TIMEOUT = 12
 READ_TIMEOUT = 12
 MAX_WORKERS = 40
-RR_TEST_RUNS = 3
+RR_TEST_RUNS = 1
 
 GEOIP_URL = "http://ip-api.com/json/{ip}?fields=status,country,countryCode,query,message"
 
