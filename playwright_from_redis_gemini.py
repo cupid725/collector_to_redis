@@ -7,15 +7,12 @@ from playwright.sync_api import sync_playwright
 # playwright-stealth 대신 수동으로 stealth 기능 구현
 
 # ===================== 1. 설정 및 데이터 로드 =====================
-ENSURE_TIMEOUT = 240
-
 TARGET_URL = "https://www.youtube.com/shorts/5y-_oaunCCQ?feature=share"
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"
-TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
 
-NUM_BROWSERS = 3
+NUM_BROWSERS = 1
 REDIS_ZSET_ALIVE = "proxies:alive"
 REDIS_ZSET_LEASE = "proxies:lease"
 
@@ -75,19 +72,28 @@ def get_redis():
 def simulate_mobile_behavior(page):
     """실제 모바일 사용자처럼 행동 시뮬레이션"""
     try:
-        # 1. 랜덤 스크롤 (모바일 스와이프 느낌)
-        for _ in range(random.randint(1, 3)):
-            scroll_amount = random.randint(50, 200)
+        # 1. 랜덤 스크롤 (모바일 스와이프 느낌) - 더 자연스럽게
+        for _ in range(random.randint(2, 4)):
+            scroll_amount = random.randint(30, 150)
             page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-            time.sleep(random.uniform(0.3, 0.8))
+            time.sleep(random.uniform(0.5, 1.2))
         
-        # 2. 마우스 클릭 (터치 대신 - 더 안정적)
+        # 2. 마우스 움직임 (사람처럼)
         viewport = page.viewport_size
         if viewport:
-            x = random.randint(100, viewport['width'] - 100)
-            y = random.randint(100, viewport['height'] - 100)
-            page.mouse.click(x, y)
-            time.sleep(random.uniform(0.5, 1.5))
+            # 여러 지점으로 마우스 이동
+            for _ in range(random.randint(2, 4)):
+                x = random.randint(50, viewport['width'] - 50)
+                y = random.randint(50, viewport['height'] - 50)
+                page.mouse.move(x, y)
+                time.sleep(random.uniform(0.1, 0.3))
+            
+            # 랜덤 클릭
+            if random.random() > 0.5:
+                x = random.randint(100, viewport['width'] - 100)
+                y = random.randint(100, viewport['height'] - 100)
+                page.mouse.click(x, y)
+                time.sleep(random.uniform(0.5, 1.5))
         
     except Exception as e:
         print(f"   ⚠️  행동 시뮬레이션 중 경고: {e}")
@@ -97,7 +103,7 @@ def inject_mobile_properties(page):
     page.add_init_script("""
         // ========== Stealth 기능 (자동화 탐지 방지) ==========
         
-        // 1. webdriver 속성 제거
+        // 1. webdriver 속성 제거 (가장 중요)
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined
         });
@@ -118,12 +124,31 @@ def inject_mobile_properties(page):
                 originalQuery(parameters)
         );
         
-        // 4. Plugins 배열 추가
+        // 4. Plugins 배열 추가 (실제 Chrome과 유사하게)
         Object.defineProperty(navigator, 'plugins', {
             get: () => [
-                {name: 'Chrome PDF Plugin', description: 'Portable Document Format'},
-                {name: 'Chrome PDF Viewer', description: 'Portable Document Format'},
-                {name: 'Native Client', description: 'Native Client Executable'}
+                {
+                    0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
+                    description: "Portable Document Format",
+                    filename: "internal-pdf-viewer",
+                    length: 1,
+                    name: "Chrome PDF Plugin"
+                },
+                {
+                    0: {type: "application/pdf", suffixes: "pdf", description: "Portable Document Format"},
+                    description: "Portable Document Format", 
+                    filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
+                    length: 1,
+                    name: "Chrome PDF Viewer"
+                },
+                {
+                    0: {type: "application/x-nacl", suffixes: "", description: "Native Client Executable"},
+                    1: {type: "application/x-pnacl", suffixes: "", description: "Portable Native Client Executable"},
+                    description: "",
+                    filename: "internal-nacl-plugin",
+                    length: 2,
+                    name: "Native Client"
+                }
             ]
         });
         
@@ -132,19 +157,29 @@ def inject_mobile_properties(page):
             get: () => ['ko-KR', 'ko', 'en-US', 'en']
         });
         
+        // 6. Hardware Concurrency (CPU 코어 수)
+        Object.defineProperty(navigator, 'hardwareConcurrency', {
+            get: () => 8
+        });
+        
+        // 7. Device Memory
+        Object.defineProperty(navigator, 'deviceMemory', {
+            get: () => 8
+        });
+        
         // ========== 모바일 환경 속성 ==========
         
-        // 6. 터치 이벤트 지원 강화
+        // 8. 터치 이벤트 지원 강화
         Object.defineProperty(navigator, 'maxTouchPoints', {
             get: () => 5
         });
         
-        // 7. 모바일 플랫폼 정보
+        // 9. 모바일 플랫폼 정보
         Object.defineProperty(navigator, 'platform', {
             get: () => 'Linux armv8l'
         });
         
-        // 8. 배터리 API
+        // 10. 배터리 API
         navigator.getBattery = () => Promise.resolve({
             charging: Math.random() > 0.5,
             chargingTime: 0,
@@ -152,7 +187,7 @@ def inject_mobile_properties(page):
             level: Math.random() * 0.5 + 0.3
         });
         
-        // 9. 네트워크 정보
+        // 11. 네트워크 정보
         Object.defineProperty(navigator, 'connection', {
             get: () => ({
                 effectiveType: ['4g', '3g'][Math.floor(Math.random() * 2)],
@@ -162,7 +197,7 @@ def inject_mobile_properties(page):
             })
         });
         
-        // 10. WebGL 모바일 특성
+        // 12. WebGL 모바일 특성
         const getParameter = WebGLRenderingContext.prototype.getParameter;
         WebGLRenderingContext.prototype.getParameter = function(param) {
             if (param === 37445) return 'ARM';
@@ -170,16 +205,48 @@ def inject_mobile_properties(page):
             return getParameter.apply(this, arguments);
         };
         
-        // 11. 자동화 감지 우회
+        // 13. 자동화 감지 우회 - 더 강력하게
         delete Object.getPrototypeOf(navigator).webdriver;
         
-        // 12. iframe 체크 우회
+        // 14. iframe 체크 우회
         Object.defineProperty(window, 'outerWidth', {
             get: () => window.innerWidth
         });
         Object.defineProperty(window, 'outerHeight', {
             get: () => window.innerHeight
         });
+        
+        // 15. toString 메서드 재정의 (탐지 우회)
+        const toStringProxy = new Proxy(Function.prototype.toString, {
+            apply: function(target, thisArg, args) {
+                if (thisArg === WebGLRenderingContext.prototype.getParameter) {
+                    return 'function getParameter() { [native code] }';
+                }
+                return target.apply(thisArg, args);
+            }
+        });
+        Function.prototype.toString = toStringProxy;
+        
+        // 16. Canvas Fingerprinting 방어
+        const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(type) {
+            if (type === 'image/png' && this.width === 280 && this.height === 60) {
+                // reCAPTCHA 캔버스 크기 - 약간의 노이즈 추가
+                const context = this.getContext('2d');
+                const imageData = context.getImageData(0, 0, this.width, this.height);
+                for (let i = 0; i < imageData.data.length; i += 4) {
+                    imageData.data[i] += Math.floor(Math.random() * 3) - 1;
+                }
+                context.putImageData(imageData, 0, 0);
+            }
+            return originalToDataURL.apply(this, arguments);
+        };
+        
+        // 17. 마우스 이벤트 타이밍 (사람처럼)
+        let lastMouseMove = Date.now();
+        document.addEventListener('mousemove', function() {
+            lastMouseMove = Date.now();
+        }, true);
     """)
 
 # ===================== 3. 워커 함수 (강화된 모바일 시뮬레이션) =====================
@@ -212,8 +279,19 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                     "--disable-features=IsolateOrigins,site-per-process",
                     f"--window-position={window_pos['x']},{window_pos['y']}",
                     f"--window-size={window_pos['width']},{window_pos['height']}",
-                    "--autoplay-policy=no-user-gesture-required",  # 자동재생 허용
-                    "--disable-web-security",  # CORS 우회
+                    "--autoplay-policy=no-user-gesture-required",
+                    "--disable-web-security",
+                    # 추가 봇 탐지 우회 옵션
+                    "--disable-blink-features=AutomationControlled",
+                    "--exclude-switches=enable-automation",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-accelerated-2d-canvas",
+                    "--disable-gpu",
+                    "--start-maximized",
+                    "--disable-infobars",
+                    "--disable-extensions",
                 ],
                 timeout=60000
             )
@@ -299,7 +377,16 @@ def monitor_service(url, proxy_url, index, stop_event, r):
             
             # 6. YouTube Shorts 로딩 대기
             print(f"[Bot-{index}] ⏳ YouTube Shorts 초기화 대기...")
-            time.sleep(5)
+            time.sleep(random.uniform(3, 6))  # 랜덤 대기로 더 자연스럽게
+            
+            # 6-1. 사람처럼 마우스 움직임 추가
+            viewport = page.viewport_size
+            if viewport:
+                for _ in range(random.randint(3, 6)):
+                    x = random.randint(50, viewport['width'] - 50)
+                    y = random.randint(50, viewport['height'] - 50)
+                    page.mouse.move(x, y)
+                    time.sleep(random.uniform(0.1, 0.3))
             
             # 7. 비디오 재생 상태 확인 및 강제 재생
             video_status = page.evaluate("""() => {
@@ -349,7 +436,7 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                 simulate_mobile_behavior(page)
 
             # 10. 시청 시뮬레이션 (종료 신호 체크하면서)
-            wait_time = random.uniform(25, 45)
+            wait_time = random.uniform(180, 220)
             print(f"[Bot-{index}] ⏱️  {wait_time:.1f}초 시청 시뮬레이션...")
             
             # 5초마다 재생 상태 체크
@@ -623,7 +710,7 @@ def test_without_proxy(url, region_name="korea"):
                     print(f"       - 에러: {video_check2['error']}")
             
             # 시청 시뮬레이션
-            wait_time = random.uniform(ENSURE_TIMEOUT, ENSURE_TIMEOUT+60)
+            wait_time = 30
             print(f"\n[TEST] ⏱️  {wait_time}초 시청 테스트")
             print(f"[TEST] 💡 브라우저 창에서 직접 확인하세요")
             print(f"[TEST] 💡 수동으로 재생 버튼을 눌러보세요")
