@@ -4,81 +4,60 @@ import time
 import json
 import redis
 from playwright.sync_api import sync_playwright
+from undetected_playwright import Tarnished  # undetected-playwright
 
 # ===================== 1. 설정 및 타임아웃 변수 =====================
-
 # === 타겟 URL 설정 ===
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"  # 크리스마스 2
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"  # 크리스마스
 
-# === 브라우저 설정 ===
-NUM_BROWSERS = 3  # 동시 실행할 브라우저 개수
 
-# === Redis 설정 ===
-REDIS_ZSET_ALIVE = "proxies:alive"  # 사용 가능한 프록시 목록
-REDIS_ZSET_LEASE = "proxies:lease"  # 사용 중인 프록시 목록
+TARGET_URL = "https://youtube.com/shorts/8tat5aSyW4Q?feature=share"  # 크리스마스 2
+TARGET_URL1 = "https://youtube.com/shorts/8tat5aSyW4Q?feature=share"  # 크리스마스
 
-# === 화면 레이아웃 설정 ===
-SCREEN_WIDTH = 1920   # 모니터 전체 너비
-SCREEN_HEIGHT = 1080  # 모니터 전체 높이
+NUM_BROWSERS = 3
 
-# ===================== 타임아웃 설정 (초 단위) =====================
+REDIS_ZSET_ALIVE = "proxies:alive"
+REDIS_ZSET_LEASE = "proxies:lease"
 
-# --- 브라우저 및 네트워크 타임아웃 ---
-BROWSER_LAUNCH_TIMEOUT = 60      # 브라우저 시작 대기 시간
-PAGE_LOAD_TIMEOUT = 90           # 페이지 로딩 대기 시간
-CONTEXT_DEFAULT_TIMEOUT = 90     # 컨텍스트 기본 타임아웃
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
 
-# --- 페이지 로딩 재시도 설정 ---
-PAGE_LOAD_MAX_RETRIES = 3        # 페이지 로딩 실패 시 최대 재시도 횟수
-PAGE_LOAD_RETRY_DELAY_MIN = 3    # 재시도 간 최소 대기 시간
-PAGE_LOAD_RETRY_DELAY_MAX = 7    # 재시도 간 최대 대기 시간
+BROWSER_LAUNCH_TIMEOUT = 60
+PAGE_LOAD_TIMEOUT = 90
+CONTEXT_DEFAULT_TIMEOUT = 90
 
-# --- YouTube Shorts 로딩 대기 ---
-YOUTUBE_INIT_DELAY_MIN = 3       # YouTube Shorts 초기화 최소 대기
-YOUTUBE_INIT_DELAY_MAX = 6       # YouTube Shorts 초기화 최대 대기
+PAGE_LOAD_MAX_RETRIES = 3
+PAGE_LOAD_RETRY_DELAY_MIN = 3
+PAGE_LOAD_RETRY_DELAY_MAX = 7
 
-# --- 사람처럼 행동하기 위한 대기 시간 ---
-HUMAN_MOUSE_MOVE_DELAY_MIN = 0.1   # 마우스 이동 간 최소 대기
-HUMAN_MOUSE_MOVE_DELAY_MAX = 0.3   # 마우스 이동 간 최대 대기
-HUMAN_CLICK_DELAY_MIN = 0.5        # 클릭 후 최소 대기
-HUMAN_CLICK_DELAY_MAX = 1.5        # 클릭 후 최대 대기
-HUMAN_SCROLL_DELAY_MIN = 0.5       # 스크롤 간 최소 대기
-HUMAN_SCROLL_DELAY_MAX = 1.2       # 스크롤 간 최대 대기
+YOUTUBE_INIT_DELAY_MIN = 3
+YOUTUBE_INIT_DELAY_MAX = 6
 
-# --- 영상 시청 시간 설정 ---
-VIDEO_WATCH_TIME_MIN = 240         # 최소 시청 시간 (초) - 4분
-VIDEO_WATCH_TIME_MAX = 300         # 최대 시청 시간 (초) - 5분
-VIDEO_STATUS_CHECK_INTERVAL = 5    # 재생 상태 확인 주기 (초)
+HUMAN_MOUSE_MOVE_DELAY_MIN = 0.1
+HUMAN_MOUSE_MOVE_DELAY_MAX = 0.3
+HUMAN_CLICK_DELAY_MIN = 0.5
+HUMAN_CLICK_DELAY_MAX = 1.5
+HUMAN_SCROLL_DELAY_MIN = 0.5
+HUMAN_SCROLL_DELAY_MAX = 1.2
 
-# --- 프록시 관리 ---
-PROXY_PENALTY_TIME = 60           # 실패한 프록시 재사용 대기 시간 (초)
-PROXY_LEASE_TIME = 600            # 프록시 임대 시간 (초)
+VIDEO_WATCH_TIME_MIN = 240
+VIDEO_WATCH_TIME_MAX = 300
+VIDEO_STATUS_CHECK_INTERVAL = 5
 
-# --- 메인 루프 대기 시간 ---
-MAIN_LOOP_SLOT_CHECK_DELAY = 5    # 새 슬롯 시작 간 대기 시간
-MAIN_LOOP_ITERATION_DELAY = 2     # 메인 루프 반복 주기
+PROXY_PENALTY_TIME = 60
+PROXY_LEASE_TIME = 600
 
-# --- 종료 시 스레드 대기 ---
-THREAD_JOIN_TIMEOUT = 10          # 스레드 종료 최대 대기 시간
+MAIN_LOOP_SLOT_CHECK_DELAY = 5
+MAIN_LOOP_ITERATION_DELAY = 2
 
-# --- 테스트 모드 설정 ---
-TEST_MODE_WATCH_TIME = 30         # 테스트 모드 시청 시간 (초)
+THREAD_JOIN_TIMEOUT = 10
+
+TEST_MODE_WATCH_TIME = 30
 
 # ===================== 화면 배치 함수 =====================
 
 def calculate_window_position(index, total_browsers):
-    """
-    브라우저 인덱스에 따라 창 위치와 크기 계산
-    
-    Args:
-        index: 브라우저 슬롯 번호 (0부터 시작)
-        total_browsers: 전체 브라우저 개수
-    
-    Returns:
-        dict: {'x': x좌표, 'y': y좌표, 'width': 너비, 'height': 높이}
-    """
-    # 그리드 레이아웃 자동 계산
     if total_browsers <= 3:
         cols, rows = total_browsers, 1
     elif total_browsers <= 4:
@@ -89,24 +68,16 @@ def calculate_window_position(index, total_browsers):
         cols = 3
         rows = (total_browsers + 2) // 3
     
-    # 각 창의 크기 계산
     window_width = SCREEN_WIDTH // cols
     window_height = SCREEN_HEIGHT // rows
     
-    # 현재 인덱스의 행/열 위치
     row = index // cols
     col = index % cols
     
-    # 화면 좌표 계산
     x = col * window_width
     y = row * window_height
     
-    return {
-        'x': x,
-        'y': y,
-        'width': window_width,
-        'height': window_height
-    }
+    return {'x': x, 'y': y, 'width': window_width, 'height': window_height}
 
 # JSON 프로필 로드
 with open('region_profiles.json', 'r', encoding='utf-8') as f:
@@ -115,143 +86,36 @@ with open('region_profiles.json', 'r', encoding='utf-8') as f:
 stop_event = threading.Event()
 
 def get_redis():
-    """Redis 연결 생성"""
     return redis.Redis(host="127.0.0.1", port=6379, db=0, decode_responses=True)
 
-# ===================== 2. 모바일 행동 시뮬레이션 함수 =====================
+# ===================== 모바일 행동 시뮬레이션 =====================
 
 def simulate_mobile_behavior(page):
-    """
-    실제 모바일 사용자처럼 행동 시뮬레이션
-    - 랜덤 스크롤
-    - 자연스러운 마우스 움직임
-    - 가끔 랜덤 클릭
-    """
     try:
-        # 1. 랜덤 스크롤 (모바일 스와이프 느낌)
         for _ in range(random.randint(2, 4)):
             scroll_amount = random.randint(30, 150)
             page.evaluate(f"window.scrollBy(0, {scroll_amount})")
             time.sleep(random.uniform(HUMAN_SCROLL_DELAY_MIN, HUMAN_SCROLL_DELAY_MAX))
         
-        # 2. 마우스 움직임 (사람처럼)
         viewport = page.viewport_size
         if viewport:
-            # 여러 지점으로 자연스럽게 마우스 이동
             for _ in range(random.randint(2, 4)):
                 x = random.randint(50, viewport['width'] - 50)
                 y = random.randint(50, viewport['height'] - 50)
                 page.mouse.move(x, y)
                 time.sleep(random.uniform(HUMAN_MOUSE_MOVE_DELAY_MIN, HUMAN_MOUSE_MOVE_DELAY_MAX))
             
-            # 50% 확률로 랜덤 클릭
             if random.random() > 0.5:
                 x = random.randint(100, viewport['width'] - 100)
                 y = random.randint(100, viewport['height'] - 100)
                 page.mouse.click(x, y)
                 time.sleep(random.uniform(HUMAN_CLICK_DELAY_MIN, HUMAN_CLICK_DELAY_MAX))
-        
     except Exception as e:
-        print(f"   ⚠️  행동 시뮬레이션 중 경고: {e}")
+        print(f"   ⚠️ 행동 시뮬레이션 경고: {e}")
 
-def inject_mobile_properties(page):
-    """
-    모바일 환경 JavaScript 속성 주입 + Stealth 기능
-    - webdriver 속성 제거
-    - Chrome 객체 추가
-    - 모바일 기기 특성 시뮬레이션
-    - Canvas Fingerprinting 방어
-    """
-    page.add_init_script("""
-        // ========== Stealth 기능 (자동화 탐지 방지) ==========
-        
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        
-        window.navigator.chrome = {
-            runtime: {}, loadTimes: function() {}, csi: function() {}, app: {}
-        };
-        
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications' ?
-                Promise.resolve({state: Notification.permission}) : originalQuery(parameters)
-        );
-        
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [
-                {
-                    0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
-                    description: "Portable Document Format", filename: "internal-pdf-viewer", length: 1, name: "Chrome PDF Plugin"
-                },
-                {
-                    0: {type: "application/pdf", suffixes: "pdf", description: "Portable Document Format"},
-                    description: "Portable Document Format", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", length: 1, name: "Chrome PDF Viewer"
-                },
-                {
-                    0: {type: "application/x-nacl", suffixes: "", description: "Native Client Executable"},
-                    1: {type: "application/x-pnacl", suffixes: "", description: "Portable Native Client Executable"},
-                    description: "", filename: "internal-nacl-plugin", length: 2, name: "Native Client"
-                }
-            ]
-        });
-        
-        Object.defineProperty(navigator, 'languages', {get: () => ['ko-KR', 'ko', 'en-US', 'en']});
-        Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-        Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
-        Object.defineProperty(navigator, 'maxTouchPoints', {get: () => 5});
-        Object.defineProperty(navigator, 'platform', {get: () => 'Linux armv8l'});
-        
-        navigator.getBattery = () => Promise.resolve({
-            charging: Math.random() > 0.5, chargingTime: 0, dischargingTime: Infinity, level: Math.random() * 0.5 + 0.3
-        });
-        
-        Object.defineProperty(navigator, 'connection', {
-            get: () => ({
-                effectiveType: ['4g', '3g'][Math.floor(Math.random() * 2)],
-                downlink: Math.random() * 10 + 1, rtt: Math.random() * 100 + 50, saveData: false
-            })
-        });
-        
-        const getParameter = WebGLRenderingContext.prototype.getParameter;
-        WebGLRenderingContext.prototype.getParameter = function(param) {
-            if (param === 37445) return 'ARM';
-            if (param === 37446) return 'Mali-G72';
-            return getParameter.apply(this, arguments);
-        };
-        
-        delete Object.getPrototypeOf(navigator).webdriver;
-        
-        Object.defineProperty(window, 'outerWidth', {get: () => window.innerWidth});
-        Object.defineProperty(window, 'outerHeight', {get: () => window.innerHeight});
-        
-        const toStringProxy = new Proxy(Function.prototype.toString, {
-            apply: function(target, thisArg, args) {
-                if (thisArg === WebGLRenderingContext.prototype.getParameter) {
-                    return 'function getParameter() { [native code] }';
-                }
-                return target.apply(thisArg, args);
-            }
-        });
-        Function.prototype.toString = toStringProxy;
-        
-        const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-        HTMLCanvasElement.prototype.toDataURL = function(type) {
-            if (type === 'image/png' && this.width === 280 && this.height === 60) {
-                const context = this.getContext('2d');
-                const imageData = context.getImageData(0, 0, this.width, this.height);
-                for (let i = 0; i < imageData.data.length; i += 4) {
-                    imageData.data[i] += Math.floor(Math.random() * 3) - 1;
-                }
-                context.putImageData(imageData, 0, 0);
-            }
-            return originalToDataURL.apply(this, arguments);
-        };
-    """)
-
-# ===================== 3. 워커 함수 (YouTube 시청 봇) =====================
+# ===================== 워커 함수 =====================
 
 def monitor_service(url, proxy_url, index, stop_event, r):
-    """YouTube Shorts 자동 시청 봇"""
     success = False
     region_name = random.choice(list(REGION_PROFILES.keys()))
     profile = REGION_PROFILES[region_name]
@@ -275,8 +139,11 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                     f"--window-position={window_pos['x']},{window_pos['y']}",
                     f"--window-size={window_pos['width']},{window_pos['height']}",
                     "--autoplay-policy=no-user-gesture-required",
-                    "--exclude-switches=enable-automation",
-                    "--disable-infobars"
+                    "--disable-features=ImprovedCookieControls,LazyFrameLoading,GlobalMediaControls",
+                    "--allow-running-insecure-content",
+                    "--disable-infobars",
+                    "--no-sandbox",
+                    "--disable-web-security",
                 ],
                 timeout=BROWSER_LAUNCH_TIMEOUT * 1000
             )
@@ -298,16 +165,14 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                 geolocation={"latitude": 37.5665, "longitude": 126.9780}
             )
             
+            Tarnished.apply_stealth(context)
+            print(f"[Bot-{index}] 🛡️ undetected-playwright stealth 적용")
+
             context.set_default_timeout(CONTEXT_DEFAULT_TIMEOUT * 1000)
             context.set_default_navigation_timeout(PAGE_LOAD_TIMEOUT * 1000)
 
             page = context.new_page()
 
-            if stop_event.is_set():
-                browser.close()
-                return
-
-            inject_mobile_properties(page)
             page.add_init_script("""
                 Object.defineProperty(document, 'hidden', {get: () => false});
                 Object.defineProperty(document, 'visibilityState', {get: () => 'visible'});
@@ -321,7 +186,7 @@ def monitor_service(url, proxy_url, index, stop_event, r):
             
             while retry_count < PAGE_LOAD_MAX_RETRIES and not page_loaded and not stop_event.is_set():
                 try:
-                    print(f"[Bot-{index}] 🔄 페이지 로딩 {retry_count + 1}/{PAGE_LOAD_MAX_RETRIES}...")
+                    print(f"[Bot-{index}] 🔄 로딩 {retry_count + 1}/{PAGE_LOAD_MAX_RETRIES}...")
                     page.goto(url, referer=chosen_referer, wait_until="networkidle", timeout=PAGE_LOAD_TIMEOUT * 1000)
                     page_loaded = True
                     print(f"[Bot-{index}] ✅ 로딩 성공")
@@ -329,59 +194,66 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                     retry_count += 1
                     if retry_count < PAGE_LOAD_MAX_RETRIES:
                         wait_time = random.uniform(PAGE_LOAD_RETRY_DELAY_MIN, PAGE_LOAD_RETRY_DELAY_MAX)
-                        print(f"[Bot-{index}] ⚠️  재시도 대기 {wait_time:.1f}초...")
+                        print(f"[Bot-{index}] ⚠️ 재시도 대기 {wait_time:.1f}초...")
                         time.sleep(wait_time)
                     else:
                         raise e
             
             if stop_event.is_set():
-                browser.close()
                 return
-            
+
+            # 비디오 요소 대기
+            try:
+                page.wait_for_selector('video', timeout=30000)
+                print(f"[Bot-{index}] 🎥 video 요소 발견")
+            except:
+                print(f"[Bot-{index}] ⚠️ video 요소 대기 실패")
+
             init_wait = random.uniform(YOUTUBE_INIT_DELAY_MIN, YOUTUBE_INIT_DELAY_MAX)
             print(f"[Bot-{index}] ⏳ 초기화 대기 {init_wait:.1f}초...")
             time.sleep(init_wait)
-            
+
             viewport = page.viewport_size
             if viewport:
-                for _ in range(random.randint(3, 6)):
-                    page.mouse.move(
-                        random.randint(50, viewport['width'] - 50),
-                        random.randint(50, viewport['height'] - 50)
-                    )
-                    time.sleep(random.uniform(HUMAN_MOUSE_MOVE_DELAY_MIN, HUMAN_MOUSE_MOVE_DELAY_MAX))
-            
-            video_status = page.evaluate("""() => {
-                const video = document.querySelector('video');
-                if (!video) return {found: false};
-                video.muted = false;
-                video.volume = 0.5;
-                try { video.play().catch(e => {}); } catch(e) {}
-                return {found: true, paused: video.paused, readyState: video.readyState};
-            }""")
-            
-            if video_status['found']:
-                icon = "⏸️" if video_status['paused'] else "▶️"
-                print(f"[Bot-{index}] {icon} 비디오 발견 - 준비:{video_status['readyState']}/4")
-            
-            if viewport:
-                center_x, center_y = viewport['width'] // 2, viewport['height'] // 2
-                try:
-                    page.mouse.click(center_x, center_y)
-                    time.sleep(1)
-                    page.mouse.click(center_x, center_y)
-                    print(f"[Bot-{index}] 🖱️  재생 트리거")
-                except:
-                    pass
-            
-            time.sleep(2)
+                cx, cy = viewport['width'] // 2, viewport['height'] // 2
+                page.mouse.click(cx, cy, click_count=2, delay=200)
+                time.sleep(0.8)
+                page.mouse.click(cx, cy + 100)
+                time.sleep(0.8)
+                page.keyboard.press("Space")
+                time.sleep(0.5)
 
+            # 강제 재생 (가장 확실)
+            play_result = page.evaluate("""() => {
+                const video = document.querySelector('video');
+                if (!video) return {success: false, reason: 'no video'};
+                video.muted = true;
+                const promise = video.play();
+                if (promise !== undefined) {
+                    promise.then(() => {
+                        setTimeout(() => {
+                            video.muted = false;
+                            video.volume = 0.5;
+                        }, 3000);
+                    }).catch(() => {});
+                }
+                return {success: true, currentTime: video.currentTime};
+            }""")
+
+            if play_result.get('success', False):
+                print(f"[Bot-{index}] ▶️ 강제 자동재생 성공")
+            else:
+                print(f"[Bot-{index}] ⚠️ 자동재생 실패 - 추가 클릭")
+                if viewport:
+                    page.mouse.click(cx, cy)
+
+            time.sleep(2)
             if not stop_event.is_set():
                 simulate_mobile_behavior(page)
 
             watch_duration = random.uniform(VIDEO_WATCH_TIME_MIN, VIDEO_WATCH_TIME_MAX)
-            print(f"[Bot-{index}] ⏱️  시청 시작: {watch_duration:.0f}초 ({VIDEO_WATCH_TIME_MIN}~{VIDEO_WATCH_TIME_MAX}초)")
-            
+            print(f"[Bot-{index}] ⏱️ 시청 시작: {watch_duration:.0f}초")
+
             elapsed = 0
             last_time = 0
             
@@ -407,15 +279,10 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                 except:
                     pass
             
-            if stop_event.is_set():
-                browser.close()
-                return
-            
             if random.random() > 0.5:
                 simulate_mobile_behavior(page)
             
             success = True
-            browser.close()
             print(f"[Bot-{index}] ✅ 완료 - {elapsed:.0f}초 시청")
 
     except Exception as e:
@@ -432,12 +299,10 @@ def monitor_service(url, proxy_url, index, stop_event, r):
             r.zrem(REDIS_ZSET_LEASE, proxy_url)
             r.zadd(REDIS_ZSET_ALIVE, {proxy_url: int(time.time()) + penalty})
 
-# ===================== 4. 테스트 함수 =====================
+# ===================== 테스트 함수 =====================
 
 def test_without_proxy(url, region_name="korea"):
-    """프록시 없이 테스트"""
     print(f"\n{'='*60}\n🧪 테스트 모드\n{'='*60}\n")
-    
     profile = REGION_PROFILES.get(region_name, REGION_PROFILES["korea"])
     
     try:
@@ -453,15 +318,16 @@ def test_without_proxy(url, region_name="korea"):
                 locale=profile['locale'],
                 timezone_id=profile['timezone']
             )
+            Tarnished.apply_stealth(context)
+            print("[TEST] 🛡️ stealth 적용")
             
             page = context.new_page()
-            inject_mobile_properties(page)
-            
-            print(f"[TEST] 🎬 URL 접속...")
             page.goto(url, wait_until="networkidle")
-            print(f"[TEST] ✅ 로딩 완료")
+            print("[TEST] ✅ 로딩 완료")
             
-            time.sleep(5)
+            page.wait_for_selector('video', timeout=30000)
+            page.evaluate("""() => { const v = document.querySelector('video'); if(v){v.muted=true; v.play();} }""")
+            print("[TEST] ▶️ 강제 재생 시도")
             
             for i in range(TEST_MODE_WATCH_TIME):
                 time.sleep(1)
@@ -474,16 +340,13 @@ def test_without_proxy(url, region_name="korea"):
                         icon = "▶️" if not status['paused'] else "⏸️"
                         print(f"[TEST] {icon} {i+1}초 - 영상:{status['time']:.1f}초")
             
-            print(f"\n[TEST] ✅ 테스트 완료 (15초 후 종료)")
+            print("\n[TEST] ✅ 테스트 완료")
             time.sleep(15)
             browser.close()
-            
-    except KeyboardInterrupt:
-        print(f"\n[TEST] ⏹️  중단")
     except Exception as e:
         print(f"[TEST] 🛑 에러: {e}")
 
-# ===================== 5. 메인 루프 =====================
+# ===================== 메인 루프 =====================
 
 _LUA_CLAIM = r"""
 local alive = KEYS[1]
@@ -513,13 +376,7 @@ if __name__ == "__main__":
         sys.exit(0)
     
     print(f"\n{'='*60}")
-    print(f"🚀 YouTube Shorts 자동 시청 봇")
-    print(f"{'='*60}")
-    print(f"   브라우저: {NUM_BROWSERS}개")
-    print(f"   화면: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
-    print(f"   시청시간: {VIDEO_WATCH_TIME_MIN}~{VIDEO_WATCH_TIME_MAX}초")
-    print(f"   URL1: {TARGET_URL}")
-    print(f"   URL2: {TARGET_URL1}")
+    print(f"🚀 YouTube Shorts 자동 시청 봇 (자동재생 강화 버전)")
     print(f"{'='*60}\n")
     
     r = get_redis()
@@ -554,20 +411,16 @@ if __name__ == "__main__":
                             active_slots[slot] = t
                             print(f"[Main] ✅ 슬롯-{slot} 시작 ({len(active_slots)}/{NUM_BROWSERS})")
                             break
-                
                 time.sleep(MAIN_LOOP_SLOT_CHECK_DELAY)
             time.sleep(MAIN_LOOP_ITERATION_DELAY)
     except KeyboardInterrupt:
         pass
     finally:
-        if not stop_event.is_set():
-            stop_event.set()
-        
+        stop_event.set()
         print(f"\n⏳ 정리 중...")
         for slot, t in active_slots.items():
             if t.is_alive():
                 t.join(timeout=THREAD_JOIN_TIMEOUT)
                 status = "정상" if not t.is_alive() else "강제"
                 print(f"   {'✅' if not t.is_alive() else '⚠️'} 슬롯-{slot} {status} 종료")
-        
         print(f"\n{'='*60}\n✅ 종료 완료\n{'='*60}\n")
