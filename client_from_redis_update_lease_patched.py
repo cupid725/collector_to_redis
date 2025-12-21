@@ -20,7 +20,10 @@ from selenium.common.exceptions import (
     TimeoutException,
     WebDriverException,
     NoSuchElementException,
+    InvalidSessionIdException,
+    NoSuchWindowException,
 )
+
 
 # 드라이버 생성 시 동시 접근 방지용 Lock
 driver_creation_lock = threading.Lock()
@@ -203,7 +206,7 @@ except Exception as e:
 
 # ===================== 공통 설정 =====================
 TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
-TARGET_URL = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
+TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
 COMMAND_TIMEOUT = 300
 LOAD_TIMEOUT = COMMAND_TIMEOUT
@@ -358,6 +361,7 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], thre
     # ✅ User-Agent 설정 (region_profiles.json에서)
     if "user_agents" in profile:
         ua = random.choice(profile["user_agents"])
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
         options.add_argument(f"--user-agent={ua}")
         print(f"[Driver-{thread_id}] 🎭 User-Agent: {ua[:80]}...")
     
@@ -1036,11 +1040,19 @@ if __name__ == "__main__":
 
                 idx = worker_index
                 worker_index += 1
+                
+                #############################
+                url = TARGET_URL
+                if (idx % 2) :
+                    url = TARGET_URL1
+                    
+                
+                #############################
 
                 print(f"[MAIN] ▶ 새 워커 Bot-{idx} 시작, 프록시(leased): {proxy_member}")
                 t = threading.Thread(
                     target=monitor_service,
-                    args=(TARGET_URL, proxy_member, idx, stop_event, r),
+                    args=(url, proxy_member, idx, stop_event, r),
                 )
                 t.start()
                 threads.append(t)

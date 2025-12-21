@@ -9,10 +9,38 @@ from collections import Counter
 
 import redis  # pip install redis
 import threading
+import signal
+import os
+import sys
+
 # SOCKS 프록시 사용 시: pip install "requests[socks]"
 
 # ================= 전역 중단 신호 =================
 STOP_EVENT = threading.Event()
+
+# Ctrl+C 2번 누르면 강제종료
+_SIGINT_COUNT = 0
+
+
+def _sigint_handler(sig, frame):
+    """
+    1회 Ctrl+C: STOP_EVENT 설정 + 가능한 한 빨리 빠져나오도록 유도
+    2회 Ctrl+C: 즉시 강제 종료
+    """
+    global _SIGINT_COUNT
+    _SIGINT_COUNT += 1
+
+    if _SIGINT_COUNT == 1:
+        print("\n🛑 Ctrl+C 감지: 중단 신호 설정(STOP_EVENT). "
+              "진행 중인 네트워크 요청은 타임아웃까지 걸릴 수 있습니다.")
+        STOP_EVENT.set()
+    else:
+        print("\n💥 Ctrl+C 2회 감지: 강제 종료합니다.")
+        os._exit(1)
+
+
+# Windows/리눅스 공통: SIGINT 핸들러 설치
+signal.signal(signal.SIGINT, _sigint_handler)
 
 # ================= Redis 설정 =================
 REDIS_HOST = "127.0.0.1"
@@ -152,34 +180,34 @@ def fetch_proxy_list(url: str, protocol: str, source_name: str) -> List[Dict]:
     """
     if STOP_EVENT.is_set():
         return []
-    
+
     print(f"📥 {protocol.upper():7s} 다운로드: {source_name:25s} ({url.split('/')[-2]})")
     proxies: List[Dict] = []
-    
+
     try:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
-        
+
         for line in resp.text.strip().splitlines():
             if STOP_EVENT.is_set():
                 break
-            
+
             addr = _normalize_addr(line)
             if not addr:
                 continue
-            
+
             proxies.append({
                 "address": addr,
                 "protocol": protocol,
                 "source": source_name,
             })
-        
+
         print(f"   ✅ {len(proxies):4d}개 수집")
-        
+
     except Exception as e:
         if not STOP_EVENT.is_set():
             print(f"   ❌ 실패: {str(e)[:50]}")
-    
+
     return proxies
 
 def fetch_all_proxies() -> List[Dict]:
@@ -190,71 +218,71 @@ def fetch_all_proxies() -> List[Dict]:
     print("=" * 80)
     print("🔍 프록시 수집 시작")
     print("=" * 80)
-    
+
     all_sources = [
         # Tier 1: victorgeel (30분마다 업데이트 - 최고 신선도!)
         (VICTORGEEL_HTTP, "http", "victorgeel_http"),
         (VICTORGEEL_SOCKS4, "socks4", "victorgeel_socks4"),
         (VICTORGEEL_SOCKS5, "socks5", "victorgeel_socks5"),
-        
+
         # Tier 1: monosans (1시간마다 업데이트)
         (MONOSANS_HTTP, "http", "monosans_http"),
         (MONOSANS_SOCKS4, "socks4", "monosans_socks4"),
         (MONOSANS_SOCKS5, "socks5", "monosans_socks5"),
-        
+
         # Tier 2: ErcinDedeoglu (추가 다양성)
         (ERCINDEDEOGLU_HTTP, "http", "ercindedeoglu_http"),
         (ERCINDEDEOGLU_HTTPS, "http", "ercindedeoglu_https"),  # https.txt는 http 프록시로 취급
         (ERCINDEDEOGLU_SOCKS4, "socks4", "ercindedeoglu_socks4"),
         (ERCINDEDEOGLU_SOCKS5, "socks5", "ercindedeoglu_socks5"),
-        
+
         # Tier 3: vakhov (5-20분 업데이트, 검증된 품질)
         (VAKHOV_HTTP, "http", "vakhov_http"),
         (VAKHOV_HTTPS, "http", "vakhov_https"),
         (VAKHOV_SOCKS4, "socks4", "vakhov_socks4"),
         (VAKHOV_SOCKS5, "socks5", "vakhov_socks5"),
     ]
-    
+
     raw_proxies = []
-    
+
     for url, protocol, source_name in all_sources:
         if STOP_EVENT.is_set():
             break
         proxies = fetch_proxy_list(url, protocol, source_name)
         raw_proxies.extend(proxies)
         time.sleep(0.5)  # API 레이트 리밋 방지
-    
+
     # protocol + address 기준 중복 제거
     unique: Dict[tuple, Dict] = {}
     for p in raw_proxies:
         key = (p["protocol"], p["address"])
         if key not in unique:
             unique[key] = p
-    
+
     all_proxies = list(unique.values())
-    
+
     print("\n" + "=" * 80)
     print("📦 프록시 집계 (중복 제거 후)")
     print("=" * 80)
-    
+
     # 소스별 통계
     source_counts = Counter(p["source"] for p in all_proxies)
     protocol_counts = Counter(p["protocol"] for p in all_proxies)
-    
+
     print("\n📊 소스별 통계:")
     for source, count in sorted(source_counts.items()):
         print(f"  • {source:25s}: {count:4d}개")
-    
+
     print("\n📊 프로토콜별 통계:")
     for protocol, count in sorted(protocol_counts.items()):
         print(f"  • {protocol.upper():7s}: {count:4d}개")
-    
+
     print(f"\n  → Unique 총합: {len(all_proxies)}개")
-    
+
     if MAX_TOTAL_PROXIES is not None and len(all_proxies) > MAX_TOTAL_PROXIES:
         print(f"  ⚠️  너무 많아서 {MAX_TOTAL_PROXIES}개까지만 사용합니다.")
         all_proxies = all_proxies[:MAX_TOTAL_PROXIES]
-    
+
     print(f"  ▶ 실제 테스트 대상: {len(all_proxies)}개\n")
     return all_proxies
 
@@ -514,8 +542,12 @@ def collect_once():
     idx = 0
     results = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = []
+    executor = None
+    futures = []
+
+    try:
+        executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+
         for p in proxies:
             if STOP_EVENT.is_set():
                 print("\nℹ 중단 신호 감지, 나머지 프록시는 제출하지 않습니다.")
@@ -523,7 +555,7 @@ def collect_once():
             idx += 1
             futures.append(executor.submit(process_one_proxy, idx, total, p, r))
 
-        # 결과 수집
+        # 결과 수집 (중단 시 빨리 빠져나오도록)
         for f in as_completed(futures):
             if STOP_EVENT.is_set():
                 break
@@ -531,11 +563,35 @@ def collect_once():
                 result = f.result()
                 results.append(result)
             except Exception as e:
-                print(f"⚠️  쓰레드 처리 중 예외: {e}")
+                if not STOP_EVENT.is_set():
+                    print(f"⚠️  쓰레드 처리 중 예외: {e}")
                 results.append({"status": "error", "protocol": "unknown"})
+
+    except KeyboardInterrupt:
+        # collect_once 안에서 Ctrl+C가 들어온 경우도 처리
+        print("\n🛑 collect_once 내부 KeyboardInterrupt: 중단 신호 설정.")
+        STOP_EVENT.set()
+
+    finally:
+        # pending future 취소 + executor 비대기 종료 시도
+        if executor is not None:
+            try:
+                for fu in futures:
+                    fu.cancel()
+                # Python 3.9+ : cancel_futures 지원
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                executor.shutdown(wait=False)
 
     elapsed = time.time() - start
     end_dt = datetime.now()
+
+    if STOP_EVENT.is_set():
+        print("\n" + "=" * 80)
+        print("🧯 중단 처리 완료: 통계는 부분적으로만 집계될 수 있습니다.")
+        print(f"⏱️  현재까지 소요시간: {elapsed:.1f}초")
+        print("=" * 80)
+        return
 
     # 통계 출력
     print("\n" + "=" * 80)
@@ -605,7 +661,7 @@ def main_loop():
     print(f"🔧 동시 작업 스레드: {MAX_WORKERS}개")
     print(f"🌐 IP 체크: HTTPS 우선 전략")
     print(f"📦 소스 우선순위: victorgeel (30분) > monosans (1시간) > ErcinDedeoglu > vakhov")
-    print("🛑 언제든지 Ctrl + C로 중단 가능")
+    print("🛑 언제든지 Ctrl + C로 중단 가능 (2번 누르면 강제 종료)")
     print("=" * 80)
     print()
 
@@ -634,9 +690,9 @@ def main_loop():
             collect_once()
 
     except KeyboardInterrupt:
-        print("\n🛑 KeyboardInterrupt (Ctrl+C) 감지, 중단 신호 설정.")
+        # main_loop 밖에서 들어오는 경우도 대비
+        print("\n🛑 main_loop KeyboardInterrupt 감지, 중단 신호 설정.")
         STOP_EVENT.set()
-        print("⏳ 실행 중인 작업이 완료될 때까지 잠시 기다려주세요...")
 
     finally:
         print("📚 collector_redis.py 종료 완료.")
