@@ -42,9 +42,10 @@ HUMAN_CLICK_DELAY_MIN = 0.5
 HUMAN_CLICK_DELAY_MAX = 1.8
 HUMAN_SCROLL_DELAY_MIN = 0.3
 HUMAN_SCROLL_DELAY_MAX = 1.8
-VIDEO_WATCH_TIME_MIN = 15   # Shorts에 맞게 15초로 단축
-VIDEO_WATCH_TIME_MAX = 90   # 최대 1.5분
+VIDEO_WATCH_TIME_MIN = 240  # 원본대로 4분 (프록시 느릴 수 있음)
+VIDEO_WATCH_TIME_MAX = 300  # 원본대로 5분
 VIDEO_STATUS_CHECK_INTERVAL = 5
+MAX_STATUS_CHECK_ERRORS = 3  # 상태 체크 연속 실패 3번이면 종료
 PROXY_PENALTY_TIME = 60
 PROXY_LEASE_TIME_MIN = 540  # 9분
 PROXY_LEASE_TIME_MAX = 660  # 11분 (랜덤화)
@@ -505,11 +506,12 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                 time.sleep(random.uniform(0.2, 0.5))
                 page.mouse.click(center_x, center_y)
             
-            # 6. Shorts에 맞는 짧은 시청 시간
+            # 6. 시청 모니터링 (상태 체크 에러 카운팅 추가)
             watch_duration = random.uniform(VIDEO_WATCH_TIME_MIN, VIDEO_WATCH_TIME_MAX)
             elapsed = 0
             last_video_time = 0
             behavior_interval = random.randint(20, 40)  # 20-40초마다 행동
+            consecutive_errors = 0  # 연속 에러 카운터
             
             print(f"[Bot-{index}] 🎬 시청 시작 (목표: {watch_duration:.0f}초)")
             
@@ -529,6 +531,15 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                         icon = "▶️" if is_playing else "⏸️"
                         print(f"[Bot-{index}] {icon} {elapsed:.0f}/{watch_duration:.0f}초 (영상:{status['time']:.1f}초)")
                         last_video_time = status['time']
+                        consecutive_errors = 0  # 성공하면 에러 카운터 리셋
+                    else:
+                        consecutive_errors += 1
+                        print(f"[Bot-{index}] ⚠️ 영상 상태 없음 (에러: {consecutive_errors}/{MAX_STATUS_CHECK_ERRORS})")
+                    
+                    # 연속 에러 3번이면 종료
+                    if consecutive_errors >= MAX_STATUS_CHECK_ERRORS:
+                        print(f"[Bot-{index}] 🛑 상태 체크 연속 실패 {MAX_STATUS_CHECK_ERRORS}번 → 작업 종료")
+                        break
                     
                     # 랜덤한 간격으로 행동 수행
                     if elapsed % behavior_interval == 0:
@@ -536,10 +547,20 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                         behavior_interval = random.randint(20, 40)  # 다음 간격도 랜덤
                         
                 except Exception as e:
-                    print(f"[Bot-{index}] ⚠️ 상태 체크 오류: {e}")
+                    consecutive_errors += 1
+                    print(f"[Bot-{index}] ⚠️ 상태 체크 오류 (에러: {consecutive_errors}/{MAX_STATUS_CHECK_ERRORS}): {e}")
+                    
+                    # 연속 에러 3번이면 종료
+                    if consecutive_errors >= MAX_STATUS_CHECK_ERRORS:
+                        print(f"[Bot-{index}] 🛑 상태 체크 연속 실패 {MAX_STATUS_CHECK_ERRORS}번 → 작업 종료")
+                        break
             
-            success = True
-            print(f"[Bot-{index}] ✅ 시청 성공 완료")
+            # elapsed가 watch_duration에 도달했고 에러가 없었으면 성공
+            if elapsed >= watch_duration and consecutive_errors < MAX_STATUS_CHECK_ERRORS:
+                success = True
+                print(f"[Bot-{index}] ✅ 시청 성공 완료")
+            else:
+                print(f"[Bot-{index}] ⚠️ 시청 미완료 (경과: {elapsed:.0f}초, 목표: {watch_duration:.0f}초)")
 
     except Exception as e:
         print(f"[Bot-{index}] 🛑 에러 발생: {e}")
@@ -589,9 +610,10 @@ if __name__ == "__main__":
     print("🚀 개선된 YouTube Shorts 시청 봇")
     print("=" * 80)
     print(f"📱 슬롯: {NUM_BROWSERS}개")
-    print(f"⏱️  시청 시간: {VIDEO_WATCH_TIME_MIN}-{VIDEO_WATCH_TIME_MAX}초 (Shorts 최적화)")
+    print(f"⏱️  시청 시간: {VIDEO_WATCH_TIME_MIN}-{VIDEO_WATCH_TIME_MAX}초 (4-5분, 프록시 느린 경우 대비)")
     print(f"🎭 Stealth: 강화된 탐지 회피 (랜덤 GPU, Canvas 노이즈, Playwright 흔적 제거)")
     print(f"🤖 행동: 자연스러운 스크롤, 터치, 클릭 패턴")
+    print(f"🔍 안전장치: 상태 체크 {MAX_STATUS_CHECK_ERRORS}회 연속 실패 시 자동 종료")
     print("=" * 80)
 
     try:
@@ -619,4 +641,7 @@ if __name__ == "__main__":
         pass
     finally:
         stop_event.set()
-        for t in active_slots.values(): t.join(timeout=5)
+        print("\n🛑 종료 중...")
+        for t in active_slots.values(): 
+            t.join(timeout=THREAD_JOIN_TIMEOUT)
+        print("✅ 모든 봇 종료 완료")
