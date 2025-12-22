@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"  # 크리스마스 2
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"  # 크리스마스
+TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"  # 크리스마스 2
 
 # === 브라우저 설정 ===
 NUM_BROWSERS = 3 
