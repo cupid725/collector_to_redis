@@ -67,8 +67,8 @@ REDIS_ZSET_ALIVE = "proxies:alive"
 REDIS_ZSET_LEASE = "proxies:lease"
 
 # ✅ 개선: 쿨타임 설정 합리화
-SUCCESS_COOL_DOWN = 0      # 성공 시 즉시 재사용 가능
-FAILURE_PENALTY = 300      # 실패 시 5분 페널티 (24시간은 너무 김)
+SUCCESS_COOL_DOWN = 3600*6      # 성공 시 6시간뒤 재사용 가능
+FAILURE_PENALTY = 3600      # 실패 시 1시간 페널티 (24시간은 너무 김)
 
 # ✅ 추가: 타임아웃 설정
 BROWSER_LAUNCH_TIMEOUT = 60000   # 60초
@@ -115,14 +115,70 @@ def apply_enhanced_stealth(page, config, device_name):
     """강화된 스텔스 로직"""
     
     stealth_scripts = [
-        # 1. 기본 WebDriver 마스킹
+        # 1. Playwright 마커 강화 제거 (추가)
+        """
+        // ===== Playwright 마커 완전 제거 =====
+        (function() {
+            const markers = [
+                'playwright', '__playwright', '__pw', '__playwright_bound_',
+                '__playwright_script__', '__playwright_evaluation_script__',
+                '__playwright_mutation_observer__',
+                'cdc_adoQpoasnfa76pfcZLmcfl', 'cdc_adoQpoasnfa76pfcZLmcfl_JSON',
+                'cdc_adoQpoasnfa76pfcZLmcfl_Array', 'cdc_adoQpoasnfa76pfcZLmcfl_Object',
+                'cdc_adoQpoasnfa76pfcZLmcfl_Promise', 'cdc_adoQpoasnfa76pfcZLmcfl_Symbol',
+                'document.$cdc_asdjflasutopfhvcZLmcfl_'
+            ];
+            
+            markers.forEach(marker => {
+                try { delete window[marker]; } catch(e) {}
+                try { delete document[marker]; } catch(e) {}
+            });
+            
+            // 속성 재정의로 접근 차단
+            Object.defineProperty(window, 'playwright', {
+                get: () => undefined,
+                set: (val) => val,
+                configurable: false
+            });
+            
+            Object.defineProperty(window, '__playwright', {
+                get: () => undefined,
+                set: (val) => val,
+                configurable: false
+            });
+            
+            // navigator.webdriver 완전 은닉
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+                configurable: false,
+                enumerable: false
+            });
+            
+            // userAgent에서 Playwright/Headless 문자열 제거
+            const originalUA = Object.getOwnPropertyDescriptor(navigator, 'userAgent');
+            Object.defineProperty(navigator, 'userAgent', {
+                get: () => {
+                    const ua = originalUA ? originalUA.get() : '';
+                    return ua
+                        .replace(/Playwright\\/[\\d\\.]+/g, '')
+                        .replace('HeadlessChrome', 'Chrome')
+                        .replace(/\\(playwright\\)/g, '')
+                        .trim();
+                },
+                configurable: true,
+                enumerable: true
+            });
+        })();
+        """,
+        
+        # 2. 기본 WebDriver 마스킹
         """
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
         window.chrome = { runtime: {} };
         Object.defineProperty(navigator, 'languages', { get: () => ['%s', '%s'] });
         """ % (config.get('locale', 'en-US'), 'en-US'),
         
-        # 2. Permissions 스푸핑
+        # 3. Permissions 스푸핑
         """
         const originalQuery = window.navigator.permissions.query;
         window.navigator.permissions.query = (parameters) => (
@@ -132,7 +188,7 @@ def apply_enhanced_stealth(page, config, device_name):
         );
         """,
         
-        # 3. 플러그인 스푸핑
+        # 4. 플러그인 스푸핑
         """
         Object.defineProperty(navigator, 'plugins', {
             get: () => [
@@ -146,7 +202,7 @@ def apply_enhanced_stealth(page, config, device_name):
         });
         """,
         
-        # 4. WebGL 스푸핑
+        # 5. WebGL 스푸핑
         """
         const getParameter = WebGLRenderingContext.prototype.getParameter;
         WebGLRenderingContext.prototype.getParameter = function(parameter) {
@@ -156,7 +212,7 @@ def apply_enhanced_stealth(page, config, device_name):
         };
         """,
         
-        # 5. Canvas 방어
+        # 6. Canvas 방어
         """
         const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
         CanvasRenderingContext2D.prototype.getImageData = function(...args) {
@@ -167,6 +223,34 @@ def apply_enhanced_stealth(page, config, device_name):
                 result.data[i + 2] += Math.floor(Math.random() * 2) - 1;
             }
             return result;
+        };
+        """,
+        
+        # 7. Function.toString() 오버라이드 (추가)
+        """
+        // Playwright 함수 문자열 감지 방지
+        const originalToString = Function.prototype.toString;
+        Function.prototype.toString = function() {
+            const str = originalToString.call(this);
+            return str
+                .replace(/__playwright_[a-zA-Z0-9_]+/g, '')
+                .replace(/playwrightBinding/g, '')
+                .replace(/\\[native code\\].*playwright.*/gi, '[native code]');
+        };
+        """,
+        
+        # 8. console.log 필터링 (추가)
+        """
+        // 콘솔 로그에서 Playwright 관련 내용 숨기기
+        const originalLog = console.log;
+        console.log = function(...args) {
+            const filteredArgs = args.map(arg => {
+                if (typeof arg === 'string') {
+                    return arg.replace(/playwright|__pw|cdc_/gi, '[REDACTED]');
+                }
+                return arg;
+            });
+            originalLog.apply(console, filteredArgs);
         };
         """
     ]
@@ -179,6 +263,7 @@ def apply_enhanced_stealth(page, config, device_name):
         except Exception as e:
             print(f"   [Stealth-{idx+1}] ⚠️ 적용 실패: {e}")
             
+                       
             
 def calculate_window_position(index, total_browsers=NUM_BROWSERS):
     """✅ 개선: 화면 배치 최적화"""
@@ -825,6 +910,7 @@ def monitor_service(url, proxy_url, index, stop_event, r):
 
     except Exception as e:
         print(f"   [Bot-{index}] 🛑 에러 발생: {str(e)[:100]}")
+        
     finally:
         try:
             if browser:
@@ -839,8 +925,14 @@ def monitor_service(url, proxy_url, index, stop_event, r):
             r.zrem(REDIS_ZSET_LEASE, proxy_url)
             
             if success:
-                r.zadd(REDIS_ZSET_ALIVE, {proxy_url: 0})
-                print(f"   [Bot-{index}] ✅ 프록시 반환 (성공)")
+                # ✅ SUCCESS_COOL_DOWN 사용하도록 수정
+                if SUCCESS_COOL_DOWN > 0:
+                    score = int(time.time()) + SUCCESS_COOL_DOWN
+                    r.zadd(REDIS_ZSET_ALIVE, {proxy_url: score})
+                    print(f"   [Bot-{index}] ✅ 프록시 반환 (성공, {SUCCESS_COOL_DOWN}초 쿨다운)")
+                else:
+                    r.zadd(REDIS_ZSET_ALIVE, {proxy_url: 0})
+                    print(f"   [Bot-{index}] ✅ 프록시 반환 (성공, 즉시 재사용 가능)")
             else:
                 if FAILURE_PENALTY > 0:
                     score = int(time.time()) + FAILURE_PENALTY
