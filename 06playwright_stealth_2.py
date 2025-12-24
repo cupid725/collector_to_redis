@@ -299,6 +299,7 @@ def handle_youtube_consent(page, timeout=10000):
         host = urlparse(url).hostname or ""
         
         if "consent.youtube.com" not in host:
+            print(f"   [Consent] 📖 동의 페이지 아님... ({host})")
             return False
 
         # 실제 사용자처럼 동의 페이지를 읽는 시간
@@ -655,6 +656,47 @@ def simulate_mobile_behavior(page, is_near_end=False, search_keyword=None):
         print(f"   [Behavior] ⚠️ 행동 시뮬레이션 오류: {e}")
         return False
 
+def detect_bot_suspicion_by_link(page):
+    """지정된 봇 확인 링크가 있는지 검사"""
+    try:
+        # 감지할 링크 패턴들
+        target_link_patterns = [
+            "https://support.google.com/youtube/answer/3037019",
+            "/answer/3037019",
+            "3037019",
+            "#zippy=%2Ccheck-that-youre-signed-into-youtube",
+            "answer/3037019#zippy"
+        ]
+        
+        # 페이지의 모든 링크 검사
+        all_links = page.locator("a[href]")
+        link_count = all_links.count()
+        
+        print(f"   [Link Check] 페이지 내 링크 수: {link_count}")
+        
+        # 모든 링크 순회 (성능을 위해 최대 100개만)
+        for i in range(min(link_count, 100)):
+            try:
+                href = all_links.nth(i).get_attribute("href")
+                if href:
+                    href_lower = href.lower()
+                    
+                    # 각 패턴과 비교
+                    for pattern in target_link_patterns:
+                        if pattern in href_lower:
+                            print(f"   [Link Check] ✅ 발견: {href[:100]}...")
+                            print(f"   [Link Check] ✅ 패턴 매칭: {pattern}")
+                            return True
+            except:
+                continue
+        
+        print(f"   [Link Check] ❌ 타겟 링크 없음")
+        return False
+        
+    except Exception as e:
+        print(f"   [Link Check] ⚠️ 오류: {e}")
+        return False
+    
 # ===================== 3. 메인 워커 (개선됨) =====================
 
 def monitor_service(url, proxy_url, index, stop_event, r):
@@ -745,6 +787,15 @@ def monitor_service(url, proxy_url, index, stop_event, r):
                     timeout=PAGE_LOAD_TIMEOUT
                 )
                 
+                # ✅ 봇 의심 페이지 체크 추가
+                #time.sleep(5)  # 페이지 로딩 대기
+                if detect_bot_suspicion_by_link(page):
+                    print(f"   [Bot-{index}] 🚨 봇 의심 페이지 감지! 브라우저 종료")
+                    success = False
+                    browser.close()
+                    playwright_mgr.stop()
+                    return  # 함수 종료
+                
                 # Shorts 페이지 대기
                 page.wait_for_selector('video, ytd-player, #shorts-player', timeout=30000)
                 page_loaded = True
@@ -763,7 +814,7 @@ def monitor_service(url, proxy_url, index, stop_event, r):
             raise Exception("페이지 로딩 최종 실패")
         
         # ✅ Consent 처리
-        time.sleep(random.uniform(2, 4))
+        time.sleep(random.uniform(5, 10))
         handle_youtube_consent(page)
         
         # 초기화 대기
