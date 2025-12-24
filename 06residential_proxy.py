@@ -16,6 +16,9 @@ from collections import Counter
 STOP_EVENT = threading.Event()
 _SIGINT_COUNT = 0
 
+# 자신의 실제 공인 IP (프로그램 시작 시 한 번 확인)
+MY_REAL_IP: Optional[str] = None
+
 def _sigint_handler(sig, frame):
     global _SIGINT_COUNT
     _SIGINT_COUNT += 1
@@ -37,7 +40,7 @@ REDIS_ZSET_LEASE = "proxies:lease"
 REDIS_KEY_PREFIX = "proxy"
 
 COLLECT_INTERVAL_MINUTES = 10
-MAX_WORKERS = 10
+MAX_WORKERS = 60
 
 # ✅ Residential 필터링 옵션
 RESIDENTIAL_ONLY = False  # True: residential만, False: 모두
@@ -224,6 +227,12 @@ def process_one_proxy(p: Dict, r: redis.Redis, idx: int, total: int) -> bool:
     if not ip:
         return False
     
+    # ✅ 추가: 내 실제 IP와 동일하면 실패 처리 (프록시가 실제로 동작하지 않음)
+    global MY_REAL_IP
+    if MY_REAL_IP and ip == MY_REAL_IP:
+        print(f"   ⚠️ 프록시 무효: 외부 IP가 내 실제 IP와 동일 ({ip}) → 스킵")
+        return False
+    
     # GeoIP 정보 조회 (RESIDENTIAL_ONLY=False면 간단하게만)
     if RESIDENTIAL_ONLY:
         ip_info = get_ip_info(ip)
@@ -376,10 +385,32 @@ def collect_once():
     
     print()
 
+def get_my_real_ip() -> Optional[str]:
+    """프록시 없이 자신의 실제 공인 IP 확인"""
+    print("🔍 실제 공인 IP 확인 중...", end=" ")
+    for url, _ in IP_CHECK_URLS:
+        try:
+            r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code == 200:
+                ip = r.text.strip()
+                if ip and ('.' in ip or ':' in ip) and len(ip) < 50:
+                    print(f"확인됨: {ip}")
+                    return ip
+        except:
+            continue
+    print("실패 (네트워크 문제 또는 차단)")
+    return None
+
 def main():
+    global MY_REAL_IP
+    
     print("=" * 80)
     print("🚀 Proxy Collector (개선됨)")
     print("=" * 80)
+    
+    # 프로그램 시작 시 한 번만 자신의 실제 IP 확인
+    MY_REAL_IP = get_my_real_ip()
+    
     print(f"⏱️  주기: {COLLECT_INTERVAL_MINUTES}분마다")
     print(f"🔧 동시 작업: {MAX_WORKERS}개 스레드")
     if RESIDENTIAL_ONLY:
