@@ -43,7 +43,7 @@ COLLECT_INTERVAL_MINUTES = 10
 MAX_WORKERS = 60
 
 # ✅ Residential 필터링 옵션
-RESIDENTIAL_ONLY = False  # True: residential만, False: 모두
+RESIDENTIAL_ONLY = True  # True: residential만, False: 모두
 
 # ================= 3. GeoIP 및 IP 검사 설정 =================
 GEOIP_URL = "http://ip-api.com/json/{ip}?fields=status,country,countryCode,query,message,isp,org,as,asname"
@@ -58,16 +58,16 @@ IP_CHECK_URLS = [
 # format: (url, default_protocol, has_protocol_prefix)
 SOURCES = [
     # 기존 소스 (프로토콜 접두사 없음)
-    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
     ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt", "socks4", False),
     ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5", False),
-    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/http.txt", "http", False),
     ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks4.txt", "socks4", False),
     ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks5.txt", "socks5", False),
-    ("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt", "http", False),
     ("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks4.txt", "socks4", False),
     ("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks5.txt", "socks5", False),
-    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt", "http", False),
     ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt", "socks4", False),
     ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt", "socks5", False),
     

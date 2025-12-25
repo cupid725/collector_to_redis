@@ -1,0 +1,439 @@
+# human_events.py
+
+import random
+import time
+from typing import Dict, List
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+class HumanEvent:
+    """
+    인간과 같은 이벤트를 생성하는 클래스
+    다양한 동작 중 랜덤으로 선택하여 실행
+    """
+    
+    def __init__(self, driver):
+        self.driver = driver
+        self.keywords = [
+            "mr redpanda", "funny videos", "gaming", "cooking", "sports",
+            "snow", "christmas", "travel", "redpanda", "entertainment",
+            "comedy", "movies", "snowman", "reviews", "puppy",
+            "asmr", "happy", "trailers", "podcasts", "cute"
+        ]
+        
+        # YouTube 요소 선택자
+        self.selectors = {
+            'home_button': 'a#logo',  # YouTube 홈 버튼
+            'search_box': 'input#search',  # 검색창
+            'search_button': 'button#search-icon-legacy',  # 검색 버튼
+            'video_links': 'ytd-video-renderer a#video-title',  # 비디오 링크
+            'shorts_next': '#shorts-player',  # Shorts 다음 버튼 (스크롤 대체)
+        }
+    
+    def execute_random_action(self) -> bool:
+        """
+        랜덤으로 동작을 선택하고 실행
+        Returns: 실행 성공 여부
+        """
+        actions = [
+            self.mouse_scroll,
+            self.click_youtube_home,
+            self.search_and_click_video,
+        ]
+        
+        # 가중치를 부여하여 동작 선택 (스크롤이 더 자주 선택되도록)
+        weights = [0.1, 0.1, 0.8]
+        selected_action = random.choices(actions, weights=weights, k=1)[0]
+        
+        print(f"[HumanEvent] 선택된 동작: {selected_action.__name__}")
+        
+        try:
+            selected_action()
+            return True
+        except Exception as e:
+            print(f"[HumanEvent] 동작 실행 중 오류: {e}")
+            return False
+    
+    def mouse_scroll(self):
+        """
+        마우스 스크롤 (다음 영상으로 넘어가는 정도)
+        기존 소스코드의 human_scroll 함수를 활용
+        """
+        print("[HumanEvent] 마우스 스크롤 실행")
+        
+        try:
+            # 1. YouTube Shorts인지 확인
+            current_url = self.driver.current_url.lower()
+            if "shorts" in current_url:
+                print("   [HumanEvent] YouTube Shorts 감지 - 다음 Shorts로 이동")
+                
+                # Shorts는 스크롤 대신 키보드 키나 JavaScript로 다음 영상으로 이동
+                try:
+                    # 방법 1: 아래쪽 화살표 키 (다음 Shorts)
+                    body = self.driver.find_element(By.TAG_NAME, 'body')
+                    body.send_keys(Keys.ARROW_DOWN)
+                    time.sleep(random.uniform(0.5, 1.5))
+                    
+                    # 방법 2: JavaScript로 스크롤 이벤트
+                    self.driver.execute_script("""
+                        window.dispatchEvent(new WheelEvent('wheel', {
+                            deltaY: 800,
+                            bubbles: true,
+                            cancelable: true
+                        }));
+                    """)
+                    
+                    print("   [HumanEvent] ✅ Shorts 다음 영상으로 이동 완료")
+                    return
+                except Exception as e:
+                    print(f"   [HumanEvent] ⚠️ Shorts 이동 실패: {e}")
+            
+            # 2. 일반 페이지 스크롤 (기존 로직 수정)
+            try:
+                scroll_height = self.driver.execute_script("return document.body.scrollHeight")
+                viewport_height = self.driver.execute_script("return window.innerHeight")
+                current_pos = self.driver.execute_script("return window.pageYOffset")
+                
+                # 스크롤 가능한 높이 확인
+                if scroll_height > viewport_height:
+                    # 다음 컨텐츠 영역으로 스크롤 (일반적인 모니터 기준)
+                    scroll_amount = random.randint(400, 800)
+                    target_pos = min(current_pos + scroll_amount, scroll_height - viewport_height)
+                    
+                    # 부드러운 스크롤
+                    step = random.randint(50, 150)
+                    while current_pos < target_pos:
+                        current_pos += step
+                        self.driver.execute_script(f"window.scrollTo(0, {current_pos});")
+                        time.sleep(random.uniform(0.02, 0.1))
+                    
+                    print(f"   [HumanEvent] ✅ 일반 페이지 스크롤 완료 ({scroll_amount}px 이동)")
+                else:
+                    # 스크롤 가능한 높이가 없으면 약간의 스크롤 시도
+                    self.driver.execute_script(f"window.scrollBy(0, {random.randint(100, 300)});")
+                    print("   [HumanEvent] ✅ 미세 스크롤 완료")
+                    
+            except Exception as e:
+                print(f"   [HumanEvent] ⚠️ 스크롤 중 오류: {e}")
+                # 기본 스크롤 시도
+                self.driver.execute_script("window.scrollBy(0, 500);")
+                
+        except Exception as e:
+            print(f"[HumanEvent] ❌ 스크롤 실패: {e}")
+    
+    def click_youtube_home(self):
+        """
+        유튜브 홈 버튼을 찾아 클릭하여 홈으로 이동
+        """
+        print("[HumanEvent] 유튜브 홈 버튼 클릭 시도")
+        
+        try:
+            # 여러 방법으로 홈 버튼 찾기
+            selectors = [
+                'a#logo',  # YouTube 로고
+                'a[title="YouTube Home"]',
+                'a[aria-label="YouTube Home"]',
+                'ytd-topbar-logo-renderer a',
+                'yt-icon-button#logo-icon-button',
+            ]
+            
+            home_button = None
+            for selector in selectors:
+                try:
+                    home_button = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    if home_button:
+                        break
+                except:
+                    continue
+            
+            if home_button:
+                # 마우스 이동 후 클릭 (더 인간처럼)
+                time.sleep(random.uniform(0.3, 0.7))
+                home_button.click()
+                print("   [HumanEvent] ✅ 홈 버튼 클릭 완료")
+                
+                # 페이지 로딩 대기
+                time.sleep(random.uniform(2, 4))
+                
+                # 홈 페이지인지 확인
+                current_url = self.driver.current_url
+                if "youtube.com" in current_url and ("/feed/" in current_url or current_url.endswith("youtube.com/")):
+                    print("   [HumanEvent] ✅ YouTube 홈 페이지로 이동됨")
+                else:
+                    print(f"   [HumanEvent] ⚠️ 홈 페이지가 아닐 수 있음: {current_url}")
+            else:
+                print("   [HumanEvent] ⚠️ 홈 버튼을 찾을 수 없음")
+                # 대체 동작: 홈 URL로 직접 이동
+                self.driver.get("https://www.youtube.com/")
+                print("   [HumanEvent] ✅ 홈 URL로 직접 이동")
+                
+        except Exception as e:
+            print(f"[HumanEvent] ❌ 홈 버튼 클릭 실패: {e}")
+            # 실패 시 홈 URL로 이동
+            try:
+                self.driver.get("https://www.youtube.com/")
+                print("   [HumanEvent] ✅ 홈 URL로 직접 이동 (예외 처리)")
+            except:
+                print("   [HumanEvent] ❌ 홈 이동 실패")
+    
+    def search_and_click_video(self):
+        """
+        검색창을 찾아 랜덤 키워드로 검색 후 랜덤 동영상 클릭
+        수정: 검색창 선택자 업데이트
+        """
+        print("[HumanEvent] 검색 및 동영상 클릭 시도")
+        
+        try:
+            # 1. 검색창 찾기 (업데이트된 선택자)
+            search_selectors = [
+                'input.yt-searchbox-input',  # 메인 검색창 클래스
+                'input[name="search_query"]',  # name 속성
+                'input[placeholder="검색"]',  # 한국어 placeholder
+                'input[placeholder="Search"]',  # 영어 placeholder
+                'input[role="combobox"]',  # role 속성
+                'yt-searchbox input',  # yt-searchbox 요소 내 input
+                'form[action="/results"] input',  # 검색 폼 내 input
+            ]
+            
+            search_box = None
+            for selector in search_selectors:
+                try:
+                    # 요소가 존재하는지 확인
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        try:
+                            if elem.is_displayed() and elem.is_enabled():
+                                search_box = elem
+                                print(f"   [HumanEvent] 검색창 찾음: {selector}")
+                                break
+                        except:
+                            continue
+                    if search_box:
+                        break
+                except:
+                    continue
+            
+            if not search_box:
+                print("   [HumanEvent] ⚠️ 검색창을 찾을 수 없음")
+                # 현재 페이지의 HTML 구조 로그 (디버깅용)
+                try:
+                    page_html = self.driver.page_source[:1000]
+                    print(f"   [HumanEvent] 현재 페이지 일부 HTML: {page_html}")
+                except:
+                    pass
+                return
+            
+            # 2. 랜덤 키워드 선택
+            keyword = random.choice(self.keywords)
+            print(f"   [HumanEvent] 검색 키워드: '{keyword}'")
+            
+            # 3. 검색창 클릭 및 키워드 입력
+            time.sleep(random.uniform(0.5, 1.0))
+            
+            # JavaScript로 클릭 시도 (더 안정적)
+            try:
+                self.driver.execute_script("arguments[0].click();", search_box)
+            except:
+                try:
+                    search_box.click()
+                except Exception as e:
+                    print(f"   [HumanEvent] ⚠️ 검색창 클릭 실패: {e}")
+                    return
+            
+            time.sleep(random.uniform(0.2, 0.5))
+            
+            # 기존 내용 지우기 (Ctrl+A + Delete)
+            try:
+                search_box.send_keys(Keys.CONTROL + "a")
+                time.sleep(0.1)
+                search_box.send_keys(Keys.DELETE)
+            except:
+                try:
+                    search_box.clear()
+                except:
+                    pass
+            
+            time.sleep(random.uniform(0.1, 0.3))
+            
+            # 인간처럼 타이핑 (글자마다 약간의 지연)
+            for char in keyword:
+                try:
+                    search_box.send_keys(char)
+                    time.sleep(random.uniform(0.05, 0.15))
+                except:
+                    break
+            
+            time.sleep(random.uniform(0.3, 0.6))
+            
+            # 4. 검색 실행 (엔터 키)
+            try:
+                search_box.send_keys(Keys.RETURN)
+                print("   [HumanEvent] ✅ 검색 실행 (엔터 키)")
+            except Exception as e:
+                print(f"   [HumanEvent] ⚠️ 엔터 키 실패: {e}")
+                # 검색 버튼 찾아서 클릭 시도
+                try:
+                    button_selectors = [
+                        'button.ytSearchboxComponentSearchButton',
+                        'button[aria-label="Search"]',
+                        'button[title="검색"]',
+                        'button[type="submit"]',
+                    ]
+                    
+                    for btn_selector in button_selectors:
+                        try:
+                            buttons = self.driver.find_elements(By.CSS_SELECTOR, btn_selector)
+                            for btn in buttons:
+                                if btn.is_displayed() and btn.is_enabled():
+                                    btn.click()
+                                    print("   [HumanEvent] ✅ 검색 버튼 클릭")
+                                    break
+                        except:
+                            continue
+                except:
+                    pass
+            
+            # 5. 검색 결과 대기
+            time.sleep(random.uniform(3, 5))
+            
+            # 6. 비디오 목록 찾기
+            video_selectors = [
+                'ytd-video-renderer a#video-title',
+                'a#video-title',
+                'ytd-video-renderer ytd-thumbnail a',
+                '#contents ytd-video-renderer a',
+            ]
+            
+            videos = []
+            for selector in video_selectors:
+                try:
+                    found_videos = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    for video in found_videos:
+                        try:
+                            if video.is_displayed() and video.is_enabled():
+                                videos.append(video)
+                        except:
+                            continue
+                    
+                    if videos:
+                        print(f"   [HumanEvent] 비디오 찾음: {len(videos)}개")
+                        break
+                except:
+                    continue
+            
+            if not videos or len(videos) == 0:
+                print("   [HumanEvent] ⚠️ 검색 결과에서 비디오를 찾을 수 없음")
+                return
+            
+            # 7. 랜덤 비디오 선택 (1-10번째 중)
+            max_video = min(10, len(videos))
+            if max_video == 0:
+                return
+                
+            video_index = random.randint(0, max_video - 1)
+            selected_video = videos[video_index]
+            
+            print(f"   [HumanEvent] 선택된 비디오: {video_index + 1}번째")
+            
+            # 8. 비디오 클릭
+            try:
+                # 비디오 제목 가져오기
+                video_title = selected_video.get_attribute('title') or selected_video.text
+                if video_title:
+                    print(f"   [HumanEvent] 비디오 제목: {video_title[:50]}...")
+                
+                # JavaScript로 클릭 (더 안정적)
+                self.driver.execute_script("arguments[0].click();", selected_video)
+                print("   [HumanEvent] ✅ 비디오 클릭 완료")
+                
+                # 9. 비디오 로딩 대기
+                time.sleep(random.uniform(3, 5))
+                
+            except Exception as e:
+                print(f"   [HumanEvent] ⚠️ 비디오 클릭 실패: {e}")
+                # 대체: 첫 번째 비디오 시도
+                try:
+                    if videos and len(videos) > 0:
+                        self.driver.execute_script("arguments[0].click();", videos[0])
+                        print("   [HumanEvent] ✅ 첫 번째 비디오로 대체 클릭")
+                except:
+                    pass
+                
+        except Exception as e:
+            print(f"[HumanEvent] ❌ 검색 및 클릭 실패: {e}")
+    
+    def random_mouse_movement(self, element=None):
+        """
+        랜덤 마우스 이동 (기존 human_mouse_move 함수 활용)
+        """
+        try:
+            action = ActionChains(self.driver)
+            window_size = self.driver.get_window_size()
+            
+            if element:
+                # 요소로 이동
+                action.move_to_element(element).perform()
+            else:
+                # 랜덤 위치로 이동
+                x_offset = random.randint(-100, 100)
+                y_offset = random.randint(-100, 100)
+                action.move_by_offset(x_offset, y_offset).perform()
+            
+            time.sleep(random.uniform(0.1, 0.3))
+            return True
+        except:
+            return False
+
+
+# 사용 예시 (기존 코드에 통합하는 방법)
+"""
+# 1. HumanEvent 클래스 임포트
+from human_events import HumanEvent
+
+# 2. monitor_service 함수 내에서 사용
+def monitor_service(...):
+    # ... 기존 코드 ...
+    
+    # HumanEvent 인스턴스 생성
+    human_event = HumanEvent(driver)
+    
+    # 랜덤 동작 실행
+    human_event.execute_random_action()
+    
+    # 또는 특정 동작 실행
+    # human_event.mouse_scroll()
+    # human_event.click_youtube_home()
+    # human_event.search_and_click_video()
+    
+    # ... 나머지 코드 ...
+"""
+
+# 추가 확장을 위한 추상 클래스 버전 (선택사항)
+"""
+from abc import ABC, abstractmethod
+import random
+
+class HumanAction(ABC):
+    @abstractmethod
+    def execute(self, driver):
+        pass
+    
+    @abstractmethod
+    def get_weight(self):
+        pass
+
+class ScrollAction(HumanAction):
+    def execute(self, driver):
+        # 스크롤 구현
+        pass
+    
+    def get_weight(self):
+        return 0.5
+
+# HumanEvent 클래스가 이러한 액션들을 관리
+"""

@@ -6,6 +6,7 @@ import os
 import shutil
 import json
 from typing import Dict, Any, Optional
+from live_human_events import HumanEvent
 
 # 외부 라이브러리
 import numpy as np  # pip install numpy
@@ -206,8 +207,9 @@ except Exception as e:
 
 # ===================== 공통 설정 =====================
 TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
-TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
+TARGET_URL1 = "https://www.youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
+
 COMMAND_TIMEOUT = 300
 LOAD_TIMEOUT = COMMAND_TIMEOUT
 ENSURE_TIMEOUT = 420
@@ -215,7 +217,7 @@ BROWSE_MAX_SECONDS = ENSURE_TIMEOUT
 STAY_DURATION = 120
 WINDOW_WIDTH = 800
 WINDOW_HEIGHT = 700
-NUM_BROWSERS = 3
+NUM_BROWSERS = 2
 HEADLESS = False
 
 HUMAN_EVENT_BEFORE_END_SECONDS = 30
@@ -927,15 +929,11 @@ def monitor_service(
         # ✅ 휴먼 이벤트 타이밍 계산: 세션 종료 HUMAN_EVENT_BEFORE_END_SECONDS초 전
         human_event_timing = max(5, stay_time - HUMAN_EVENT_BEFORE_END_SECONDS)
         
+        human_event = HumanEvent(driver)
         if human_event_timing <= 5:
             # 체류 시간이 너무 짧으면 즉시 실행
             print(f"[Bot-{index}] 체류 시작 (총 {stay_time:.1f}초, 즉시 휴먼 이벤트 실행)")
-            try:
-                body = driver.find_element(By.TAG_NAME, "body")
-                human_mouse_move(driver, end_el=body)
-            except Exception:
-                pass
-            human_scroll(driver)
+            human_event.execute_random_action()
             if not smart_wait(driver, stop_event, stay_time, index):
                 return
         else:
@@ -949,13 +947,7 @@ def monitor_service(
             if stop_event.is_set():
                 return
             
-            # 휴먼 이벤트 실행
-            try:
-                body = driver.find_element(By.TAG_NAME, "body")
-                human_mouse_move(driver, end_el=body)
-            except Exception:
-                pass
-            human_scroll(driver)
+            human_event.execute_random_action()
             
             # 휴먼 이벤트 후 남은 시간 대기
             remaining2 = hard_deadline - time.time()

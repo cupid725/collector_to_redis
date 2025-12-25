@@ -63,7 +63,7 @@ REFERERS = [
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"
 
-NUM_BROWSERS = 2 
+NUM_BROWSERS = 3 
 MOBILE_DEVICES_LIST = [
     'Pixel 5', 'Pixel 4', 'iPhone 13', 'iPhone 12', 'iPhone 11', 'iPhone SE'
 ]
