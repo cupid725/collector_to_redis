@@ -40,6 +40,11 @@ SEARCH_KEYWORDS = [
     "movie trailers",
     "asmr sounds",
     "podcast clips",
+    "cat",
+    "puppy",
+    "baby",
+    "happy",
+    "red panda",
 ]
 
 # 유입 경로(Referer) 목록 - 지역별로 다양화
@@ -58,7 +63,7 @@ REFERERS = [
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"
 
-NUM_BROWSERS = 3 
+NUM_BROWSERS = 2 
 MOBILE_DEVICES_LIST = [
     'Pixel 5', 'Pixel 4', 'iPhone 13', 'iPhone 12', 'iPhone 11', 'iPhone SE'
 ]
@@ -289,49 +294,182 @@ def calculate_window_position(index, total_browsers=NUM_BROWSERS):
         'height': window_height
     }
 
-def handle_youtube_consent(page, timeout=10000):
+def handle_youtube_consent(page, index, timeout=15000):
     """
-    ✅ 추가: 유튜브 동의 페이지 처리
-    실제 사용자처럼 읽는 시간 추가
+    ✅ 수정: 유튜브 동의 페이지 처리 - 재시도 로직 추가
     """
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            current_url = page.url
+            host = urlparse(current_url).hostname or ""
+            
+            print(f"   [Bot-{index}] [Consent-{retry_count+1}] 현재 URL: {current_url[:80]}")
+            
+            if "consent.youtube.com" not in host:
+                print(f"   [Bot-{index}] [Consent] ✅ 동의 페이지 아님, 계속 진행")
+                return True
+            
+            read_time = random.uniform(CONSENT_READ_TIME_MIN, CONSENT_READ_TIME_MAX)
+            print(f"   [Bot-{index}] [Consent] 📖 동의 페이지 읽는 중... ({read_time:.1f}초)")
+            time.sleep(read_time)
+            
+            # 다양한 버튼 셀렉터 시도
+            button_selectors = [
+                "form[action='https://consent.youtube.com/save'] button[jsname='b3VHJd']",
+                "button[aria-label*='Accept all']",
+                "button[aria-label*='모두 수락']",
+                "button:has-text('Accept all')",
+                "button:has-text('모두 수락')",
+                ".eom-buttons button:nth-child(2)",
+            ]
+            
+            button_clicked = False
+            
+            for selector in button_selectors:
+                try:
+                    consent_button = page.locator(selector).first
+                    
+                    if consent_button.count() > 0:
+                        print(f"   [Bot-{index}] [Consent] 🎯 버튼 발견: {selector[:50]}")
+                        
+                        consent_button.wait_for(state="visible", timeout=5000)
+                        
+                        box = consent_button.bounding_box()
+                        if box:
+                            page.mouse.move(
+                                box['x'] + box['width'] / 2, 
+                                box['y'] + box['height'] / 2,
+                                steps=random.randint(5, 10)
+                            )
+                            time.sleep(random.uniform(0.3, 0.8))
+                        
+                        consent_button.click()
+                        print(f"   [Bot-{index}] [Consent] ✅ 버튼 클릭 완료")
+                        button_clicked = True
+                        
+                        time.sleep(3)
+                        
+                        new_url = page.url
+                        if "consent.youtube.com" not in new_url:
+                            print(f"   [Bot-{index}] [Consent] ✅ 동의 완료, 페이지 이동됨")
+                            page.wait_for_load_state("networkidle", timeout=timeout)
+                            return True
+                        else:
+                            print(f"   [Bot-{index}] [Consent] ⚠️ 클릭했으나 페이지 이동 안됨, 재시도...")
+                            break
+                            
+                except Exception as e:
+                    print(f"   [Bot-{index}] [Consent] ⚠️ 셀렉터 {selector[:30]} 실패: {e}")
+                    continue
+            
+            if not button_clicked:
+                print(f"   [Bot-{index}] [Consent] ⚠️ 버튼을 찾지 못함, 재시도...")
+            
+            retry_count += 1
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"   [Bot-{index}] [Consent] ⚠️ 처리 중 예외: {e}")
+            retry_count += 1
+            time.sleep(2)
+    
+    print(f"   [Bot-{index}] [Consent] ❌ {max_retries}번 시도 후 실패")
+    return False
+
+def try_play_video(page, index):
+    """
+    ✅ 새로운 함수: 비디오 재생 시도 (여러 방법 사용)
+    """
+    print(f"   [Bot-{index}] 🎬 비디오 재생 시도 중...")
+    
+    # ✅ 중요: 비디오 요소가 로드될 때까지 대기
     try:
-        url = page.url
-        host = urlparse(url).hostname or ""
-        
-        if "consent.youtube.com" not in host:
-            print(f"   [Consent] 📖 동의 페이지 아님... ({host})")
-            return False
-
-        # 실제 사용자처럼 동의 페이지를 읽는 시간
-        read_time = random.uniform(CONSENT_READ_TIME_MIN, CONSENT_READ_TIME_MAX)
-        print(f"   [Consent] 📖 동의 페이지 읽는 중... ({read_time:.1f}초)")
-        time.sleep(read_time)
-        
-        # '모두 수락' 버튼 찾기
-        consent_button = page.locator("form[action='https://consent.youtube.com/save'] button[jsname='b3VHJd']")
-        
-        if consent_button.count() > 0:
-            # 버튼 위치로 마우스 이동 (자연스럽게)
-            box = consent_button.bounding_box()
-            if box:
-                page.mouse.move(
-                    box['x'] + box['width'] / 2, 
-                    box['y'] + box['height'] / 2,
-                    steps=random.randint(5, 10)
-                )
-                time.sleep(random.uniform(0.3, 0.8))
-            
-            consent_button.click()
-            print("   [Consent] ✅ 유튜브 동의 '모두 수락' 클릭 완료")
-            
-            page.wait_for_load_state("networkidle", timeout=timeout)
-            return True
-        
-        return False
+        print(f"   [Bot-{index}] ⏳ 비디오 요소 로딩 대기 중...")
+        page.wait_for_selector('video', timeout=30000, state='attached')
+        print(f"   [Bot-{index}] ✅ 비디오 요소 발견")
+        time.sleep(3)  # 추가 안정화 시간
     except Exception as e:
-        print(f"   [Consent] ⚠ 처리 중 예외 발생: {e}")
+        print(f"   [Bot-{index}] ❌ 비디오 요소 로딩 실패: {e}")
         return False
-
+    
+    # 방법 1: 화면 클릭
+    try:
+        v_size = page.viewport_size
+        if v_size:
+            click_x = v_size['width'] // 2
+            click_y = v_size['height'] // 2 + 100
+            page.mouse.move(click_x, click_y, steps=random.randint(5, 10))
+            time.sleep(random.uniform(0.5, 1.0))
+            page.mouse.click(click_x, click_y)
+            print(f"   [Bot-{index}] 🖱️ 화면 클릭 완료")
+            time.sleep(2)
+    except Exception as e:
+        print(f"   [Bot-{index}] ⚠️ 화면 클릭 실패: {e}")
+    
+    # 방법 2: 스페이스바
+    try:
+        page.keyboard.press(" ")
+        print(f"   [Bot-{index}] ␣ 스페이스바 재생 시도")
+        time.sleep(2)
+    except Exception as e:
+        print(f"   [Bot-{index}] ⚠️ 스페이스바 실패: {e}")
+    
+    # 방법 3: JavaScript play()
+    try:
+        play_result = page.evaluate("""() => {
+            const videos = document.querySelectorAll('video');
+            if (videos.length > 0) {
+                const video = videos[0];
+                return video.play()
+                    .then(() => ({success: true, time: video.currentTime, paused: video.paused}))
+                    .catch(e => ({success: false, error: e.message}));
+            }
+            return {success: false, error: 'No video found'};
+        }""")
+        
+        if play_result and play_result.get('success'):
+            print(f"   [Bot-{index}] ▶️ JavaScript 재생 성공")
+        else:
+            print(f"   [Bot-{index}] ⚠️ JavaScript 재생 실패: {play_result.get('error', '알 수 없음')}")
+        
+        time.sleep(2)
+    except Exception as e:
+        print(f"   [Bot-{index}] ⚠️ JavaScript 재생 오류: {e}")
+    
+    # 방법 4: 재생 상태 확인
+    try:
+        status = page.evaluate("""() => {
+            const v = document.querySelector('video');
+            if (v) {
+                if (v.paused) {
+                    v.play().catch(e => console.error('Play failed:', e));
+                }
+                return {
+                    currentTime: v.currentTime,
+                    paused: v.paused,
+                    duration: v.duration,
+                    readyState: v.readyState
+                };
+            }
+            return null;
+        }""")
+        
+        if status:
+            is_playing = not status['paused'] and status['currentTime'] > 0
+            print(f"   [Bot-{index}] 📊 재생 상태: {'▶️재생중' if is_playing else '⏸️정지'} " +
+                  f"(시간: {status['currentTime']:.1f}/{status['duration']:.1f}초)")
+            return is_playing
+        else:
+            print(f"   [Bot-{index}] ⚠️ 비디오 요소를 찾을 수 없음")
+            return False
+            
+    except Exception as e:
+        print(f"   [Bot-{index}] ⚠️ 재생 상태 확인 실패: {e}")
+        return False
+    
 def simulate_mobile_behavior(page, is_near_end=False, search_keyword=None):
     """
     ✅ 개선: 자연스러운 모바일 행동 시뮬레이션
@@ -813,65 +951,37 @@ def monitor_service(url, proxy_url, index, stop_event, r):
         if not page_loaded:
             raise Exception("페이지 로딩 최종 실패")
         
-        # ✅ Consent 처리
+        # ✅ Consent 처리 (수정됨)
         time.sleep(random.uniform(5, 10))
-        handle_youtube_consent(page)
-        
-        # 초기화 대기
-        time.sleep(random.uniform(3, 5))
-        
-        # ✅ 재생 트리거 (간단하고 안정적인 방법)
-        print(f"   [Bot-{index}] 🎬 재생 시작 시도...")
-        
-        # 1. 비디오 요소 확인
+        consent_success = handle_youtube_consent(page, index)
+        if not consent_success:
+            print(f"   [Bot-{index}] ❌ Consent 처리 실패, 브라우저 종료")
+            raise Exception("Consent 처리 실패")
+
+        # ✅ 추가: Shorts 페이지 완전 로딩 대기
+        print(f"   [Bot-{index}] ⏳ Shorts 페이지 로딩 대기 중...")
         try:
-            video_count = page.evaluate("""() => {
-                return document.querySelectorAll('video').length;
-            }""")
-            print(f"   [Bot-{index}] 📊 비디오 요소 개수: {video_count}")
-        except:
-            pass
-        
-        # 2. 간단한 클릭으로 재생 시도
-        v_size = page.viewport_size
-        if v_size:
-            # 약간 아래쪽 클릭 (Shorts는 중앙보다 아래쪽에서 재생됨)
-            click_x = v_size['width'] // 2
-            click_y = v_size['height'] // 2 + 100
-            
-            page.mouse.move(click_x, click_y, steps=random.randint(5, 10))
-            time.sleep(random.uniform(0.5, 1.0))
-            page.mouse.click(click_x, click_y)
-            print(f"   [Bot-{index}] 🖱️ 화면 클릭 ({click_x}, {click_y})")
-        
-        # 3. 키보드 스페이스바로 재생 시도
-        time.sleep(1)
-        page.keyboard.press(" ")
-        print(f"   [Bot-{index}] ␣ 스페이스바 재생 시도")
-        
-        # 4. JavaScript로 직접 재생 시도
-        time.sleep(1)
-        try:
-            play_result = page.evaluate("""() => {
-                const videos = document.querySelectorAll('video');
-                if (videos.length > 0) {
-                    const video = videos[0];
-                    return video.play()
-                        .then(() => ({success: true, time: video.currentTime}))
-                        .catch(e => ({success: false, error: e.message}));
-                }
-                return {success: false, error: 'No video found'};
-            }""")
-            
-            if play_result and play_result.get('success'):
-                print(f"   [Bot-{index}] ▶️ JavaScript 재생 성공")
-            else:
-                print(f"   [Bot-{index}] ⚠️ JavaScript 재생 실패: {play_result.get('error', '알 수 없음')}")
+            # video 요소와 shorts-player 둘 다 확인
+            page.wait_for_selector('video, ytd-player, #shorts-player', timeout=30000, state='visible')
+            print(f"   [Bot-{index}] ✅ Shorts 페이지 로딩 완료")
         except Exception as e:
-            print(f"   [Bot-{index}] ⚠️ JavaScript 재생 오류: {e}")
-        
+            print(f"   [Bot-{index}] ⚠️ Shorts 로딩 타임아웃: {e}")
+
+        # 초기화 대기 (더 길게)
+        wait_time = random.uniform(5, 8)
+        print(f"   [Bot-{index}] ⏳ 안정화 대기 중... ({wait_time:.1f}초)")
+        time.sleep(wait_time)
+
+        # ✅ 재생 트리거 (수정됨)
+        print(f"   [Bot-{index}] 🎬 재생 시작 시도...")
+        is_playing = try_play_video(page, index)
+
+        if not is_playing:
+            print(f"   [Bot-{index}] ⚠️ 재생 시작 실패, 그래도 시청 시도...")
+
         # 재생 확인 대기
         time.sleep(random.uniform(3, 5))
+
         
         # ✅ 시청 로직
         watch_duration = random.uniform(VIDEO_WATCH_MIN, VIDEO_WATCH_MAX)
