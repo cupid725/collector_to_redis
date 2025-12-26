@@ -3,3 +3,4 @@
 *.xlsx
 *.log
 naver_monitor_out
+__pycache__\

@@ -58,23 +58,23 @@ IP_CHECK_URLS = [
 # format: (url, default_protocol, has_protocol_prefix)
 SOURCES = [
     # 기존 소스 (프로토콜 접두사 없음)
-    #("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
-    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt", "socks4", False),
-    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/http.txt", "http", False),
-    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks4.txt", "socks4", False),
-    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks5.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt", "http", False),
-    ("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks4.txt", "socks4", False),
-    ("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks5.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt", "http", False),
-    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt", "socks4", False),
-    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt", "socks4", False),
+    #("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks4.txt", "socks4", False),
+    #("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks4.txt", "socks4", False),
+    #("https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt", "http", False),
+    #("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt", "socks4", False),
+    #("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt", "socks5", False),
     
     # ✅ 새로운 소스 (프로토콜 접두사 있거나 다양한 형식)
     ("https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt", "http", True),
-    ("https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt", "socks5", True),
-    ("https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt", "socks5", True),
+    #("https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt", "socks5", True),
+    #("https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt", "socks5", True),
 ]
 
 # ✅ Datacenter 키워드
