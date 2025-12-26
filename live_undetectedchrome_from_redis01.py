@@ -217,7 +217,7 @@ BROWSE_MAX_SECONDS = ENSURE_TIMEOUT
 STAY_DURATION = 120
 WINDOW_WIDTH = 800
 WINDOW_HEIGHT = 700
-NUM_BROWSERS = 2
+NUM_BROWSERS = 1
 HEADLESS = False
 
 HUMAN_EVENT_BEFORE_END_SECONDS = 30
@@ -927,36 +927,42 @@ def monitor_service(
         stay_time = min(stay_time, remaining)
 
         # ✅ 휴먼 이벤트 타이밍 계산: 세션 종료 HUMAN_EVENT_BEFORE_END_SECONDS초 전
-        human_event_timing = max(5, stay_time - HUMAN_EVENT_BEFORE_END_SECONDS)
+        #human_event_timing = max(5, stay_time - HUMAN_EVENT_BEFORE_END_SECONDS)
+        human_event_timing = min(HUMAN_EVENT_BEFORE_END_SECONDS, stay_time - HUMAN_EVENT_BEFORE_END_SECONDS)
         
         human_event = HumanEvent(driver)
         if human_event_timing <= 5:
             # 체류 시간이 너무 짧으면 즉시 실행
             print(f"[Bot-{index}] 체류 시작 (총 {stay_time:.1f}초, 즉시 휴먼 이벤트 실행)")
             human_event.execute_random_action()
-            if not smart_wait(driver, stop_event, stay_time, index):
+
+            # ✅ 휴먼 이벤트 후: 남은 시간과 무관하게 10초 대기 후 종료
+            print(f"[Bot-{index}] ⏳ 휴먼 이벤트 후 10초 대기...")
+            if not smart_wait(driver, stop_event, 10, index):
                 return
+            print(f"[Bot-{index}] 모니터링 정상 종료.")
+            return
         else:
             # 계산된 시점에 휴먼 이벤트 실행
             after_event_wait = stay_time - human_event_timing
+
             print(f"[Bot-{index}] 체류 시작 (총 {stay_time:.1f}초: 대기 {human_event_timing:.1f}초 → 휴먼 이벤트 → 마무리 {after_event_wait:.1f}초)")
-            
+
             # 휴먼 이벤트 전 대기
             if not smart_wait(driver, stop_event, human_event_timing, index):
                 return
             if stop_event.is_set():
                 return
-            
-            human_event.execute_random_action()
-            
-            # 휴먼 이벤트 후 남은 시간 대기
-            remaining2 = hard_deadline - time.time()
-            tail = min(after_event_wait, max(0, remaining2))
-            if tail > 0:
-                if not smart_wait(driver, stop_event, tail, index):
-                    return
 
-        print(f"[Bot-{index}] 모니터링 정상 종료.")
+            human_event.execute_random_action()
+
+            # ✅ 휴먼 이벤트 후: 남은 시간과 무관하게 10초 대기 후 종료
+            print(f"[Bot-{index}] ⏳ 휴먼 이벤트 후 10초 대기...")
+            if not smart_wait(driver, stop_event, 10, index):
+                return
+            print(f"[Bot-{index}] 모니터링 정상 종료.")
+            return
+
 
     except Exception as e:
         print(f"[Bot-{index}] 🛑 오류 발생: {e.__class__.__name__}: {e}")
