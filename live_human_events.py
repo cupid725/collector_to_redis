@@ -14,7 +14,22 @@ class HumanEvent:
     인간과 같은 이벤트를 생성하는 클래스
     다양한 동작 중 랜덤으로 선택하여 실행
     """
-    
+
+    # ✅ 클래스 전역(클래스 변수) 액션 목록
+    # - 클래스 변수에서는 self를 직접 참조할 수 없으므로 "메서드 이름(str)"로 보관합니다.
+    # - 실행 시 getattr(self, name)으로 바운드 메서드를 꺼내 호출합니다.
+    ACTIONS = (
+        "mouse_scroll",
+        "click_youtube_home",
+        "search_and_click_video",
+        "combine_action",  # ✅ 액션 리스트 마지막에 포함
+    )
+
+    # ✅ 액션 가중치(임시: 전부 0)
+    # - weights 합이 0이면 execute_random_action()은 균등 랜덤(random.choice)으로 동작하도록 처리했습니다.
+    # - 원하는 값으로 나중에 수정하세요. (ACTIONS와 길이 동일해야 함)
+    ACTION_WEIGHTS = (0.2, 0.3, 0.3, 0.2)
+
     def __init__(self, driver):
         self.driver = driver
         self.keywords = [
@@ -62,15 +77,19 @@ class HumanEvent:
         랜덤으로 동작을 선택하고 실행
         Returns: 실행 성공 여부
         """
-        actions = [
-            self.mouse_scroll,
-            self.click_youtube_home,
-            self.search_and_click_video,
-        ]
-        
-        # 가중치를 부여하여 동작 선택 (스크롤이 더 자주 선택되도록)
-        weights = [0.3, 0.4,0.3]
-        selected_action = random.choices(actions, weights=weights, k=1)[0]
+        # ✅ 클래스 전역 ACTIONS에서 바운드 메서드로 변환
+        actions = [getattr(self, name) for name in self.ACTIONS]
+
+        # ✅ 가중치 기반 선택 (임시: ACTION_WEIGHTS 기본값은 전부 0)
+        weights = list(self.ACTION_WEIGHTS)
+        if len(weights) != len(actions):
+            weights = [0] * len(actions)
+
+        if sum(weights) > 0:
+            selected_action = random.choices(actions, weights=weights, k=1)[0]
+        else:
+            # weights가 전부 0이면 균등 랜덤으로 선택
+            selected_action = random.choice(actions)
         
         print(f"[HumanEvent] 선택된 동작: {selected_action.__name__}")
         
@@ -81,6 +100,31 @@ class HumanEvent:
             print(f"[HumanEvent] 동작 실행 중 오류: {e}")
             return False
     
+    def combine_action(self) -> bool:
+        """
+        ACTIONS 중 서로 중복되지 않게 2개를 랜덤 선택해서, 순차 실행합니다.
+        Returns: 전체 실행 성공 여부
+        """
+        candidates = [n for n in self.ACTIONS if n != "combine_action"]
+        picked_names = random.sample(candidates, 2)
+        print(f"[HumanEvent] combine_action 선택: {picked_names}")
+
+        for name in picked_names:
+            action = getattr(self, name, None)
+            if not callable(action):
+                print(f"[HumanEvent] ⚠️ 액션 메서드가 존재하지 않음: {name}")
+                return False
+
+            print(f"[HumanEvent] combine_action 실행: {name}")
+            try:
+                action()
+            except Exception as e:
+                print(f"[HumanEvent] combine_action 중 오류({name}): {e}")
+                return False
+
+        return True
+
+
     def mouse_scroll(self):
         """
         마우스 스크롤 (다음 영상으로 넘어가는 정도)
