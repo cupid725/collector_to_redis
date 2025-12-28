@@ -9,6 +9,7 @@ import signal
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from urllib.parse import urlparse
 
+
 # ===================== 1. 설정 및 데이터 로드 =====================
 
 # 지역별 설정 로드 (locale, timezone 등)
@@ -62,11 +63,11 @@ REFERERS = [
 
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"
+TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
+TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
 
-NUM_BROWSERS = 3 
-MOBILE_DEVICES_LIST = [
-    'Pixel 5', 'Pixel 4', 'iPhone 13', 'iPhone 12', 'iPhone 11', 'iPhone SE'
-]
+NUM_BROWSERS = 2 
+MOBILE_DEVICES_LIST = []
 
 REDIS_ZSET_ALIVE = "proxies:alive"
 REDIS_ZSET_LEASE = "proxies:lease"
@@ -97,6 +98,7 @@ SCREEN_HEIGHT = 1080
 def get_redis():
     return redis.Redis(host="127.0.0.1", port=6379, db=0, decode_responses=True)
 
+      
 def apply_stealth_and_custom(page, config, device_name):
     """
     ✅ 간소화된 스텔스 로직 - YouTube 호환성 최우선
@@ -269,7 +271,34 @@ def apply_enhanced_stealth(page, config, device_name):
             print(f"   [Stealth-{idx+1}] ⚠️ 적용 실패: {e}")
             
                        
-            
+def apply_ultimate_stealth(page, config, device_name):
+    """
+    ✅ 최고 수준 스텔스: 라이브러리 + 커스텀 스크립트 조합
+    """
+    print(f"   [Stealth] 🛡️ 최고 수준 스텔스 적용 중...")
+    
+    # 1. playwright-stealth 라이브러리 적용
+    try:
+        from playwright_stealth import stealth_sync as stealth
+        stealth(page)
+        print(f"   [Stealth] ✅ playwright-stealth 라이브러리 적용 완료")
+    except ImportError:
+        # stealth_sync가 없으면 기본 stealth 시도
+        try:
+            from playwright.sync_api import sync_playwright
+            import playwright_stealth
+            playwright_stealth.stealth_sync(page)
+            print(f"   [Stealth] ✅ playwright-stealth 적용 완료")
+        except:
+            print(f"   [Stealth] ⚠️ playwright-stealth 미설치 또는 호환 안됨")
+    except Exception as e:
+        print(f"   [Stealth] ⚠️ 라이브러리 적용 실패: {e}")
+    
+    # 2. 추가 커스텀 강화 (라이브러리가 놓친 부분 보완)
+    apply_enhanced_stealth(page, config, device_name)
+    
+    print(f"   [Stealth] ✅ 최고 수준 스텔스 적용 완료")
+                
 def calculate_window_position(index, total_browsers=NUM_BROWSERS):
     """✅ 개선: 화면 배치 최적화"""
     if total_browsers <= 3:
@@ -908,7 +937,8 @@ def monitor_service(url, proxy_url, index, stop_event, r):
         
         # ✅ 기본 스텔스만 적용 (YouTube 호환성)
         #apply_stealth_and_custom(page, config, device_name)
-        apply_enhanced_stealth(page, config, device_name)
+        #apply_enhanced_stealth(page, config, device_name)
+        apply_ultimate_stealth(page, config, device_name)
 
         # ✅ 페이지 로딩
         page_loaded = False
@@ -1120,8 +1150,35 @@ redis.call('ZADD', lease, now + l_sec, target)
 return target
 """
 
+# get_redis() 함수 다음에 추가
+def get_mobile_devices():
+    """✅ Playwright에서 사용 가능한 모바일 디바이스 목록 가져오기"""
+    try:
+        with sync_playwright() as p:
+            all_devices = list(p.devices.keys())
+            # 모바일 디바이스만 필터링 (iPhone, Pixel, Galaxy 등)
+            mobile_devices = [
+                device for device in all_devices 
+                if any(keyword in device for keyword in ['iPhone', 'Pixel', 'Galaxy', 'iPad'])
+            ]
+            
+            if mobile_devices:
+                print(f"✅ 모바일 디바이스 목록 로드 완료 ({len(mobile_devices)}개)")
+                print(f"   예시: {', '.join(mobile_devices[:5])}")
+                return mobile_devices
+            else:
+                print("⚠️ 모바일 디바이스를 찾지 못함, 기본 목록 사용")
+                return ['Pixel 5', 'iPhone 12', 'iPhone 13']
+    except Exception as e:
+        print(f"⚠️ 디바이스 목록 로드 실패: {e}, 기본 목록 사용")
+        return ['Pixel 5', 'iPhone 12', 'iPhone 13']
+    
 def main():
+    global MOBILE_DEVICES_LIST
     r = get_redis()
+    
+    MOBILE_DEVICES_LIST = get_mobile_devices()
+    
     active_slots = {}
     stop_event = threading.Event()
 
