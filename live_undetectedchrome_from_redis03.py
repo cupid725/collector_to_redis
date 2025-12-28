@@ -209,8 +209,8 @@ except Exception as e:
 
 # ===================== 공통 설정 =====================
 TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
-TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share"    #크리스마스 2
-TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share"    
+TARGET_URL1 = "https://youtube.com/shorts/u7sO-mNEpT4"    #크리스마스 2
+TARGET_URL = "https://youtube.com/shorts/u7sO-mNEpT4"    
 
 COMMAND_TIMEOUT = 180  # ✅ 300 -> 180 감소
 LOAD_TIMEOUT = COMMAND_TIMEOUT
