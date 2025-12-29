@@ -663,6 +663,7 @@ ERROR_TEXT_MARKERS = (
     "This site can't be reached",
     "ERR_TIMED_OUT",
     "net::ERR_",
+    "Connect to network",
 )
 
 def _page_looks_like_error(driver) -> bool:
@@ -687,6 +688,15 @@ def _page_looks_like_error(driver) -> bool:
     try:
         src = driver.page_source or ""
         if any(m in src for m in ERROR_TEXT_MARKERS):
+            return True
+    except Exception:
+        pass
+
+    # 4) 프록시 서버가 뿜는 에러 감지 (일부 프록시에서 connectivitycheck.gstatic.com으로 리다이렉트하는 경우)
+    try:
+        url = driver.current_url or ""
+        host = urlparse(url).hostname or ""
+        if "connectivitycheck.gstatic.com" == host:
             return True
     except Exception:
         pass
@@ -722,6 +732,51 @@ def safe_get(driver, url: str, index: int, page_load_timeout: float = 30.0) -> b
     if _page_looks_like_error(driver):
         print(f"[Bot-{index}] ⚠️ 에러 페이지 감지 (ERR_TIMED_OUT 등)")
         return False
+
+    return True
+
+def get_and_error_if_new_tab(driver, url, *, max_wait=2.0, poll=0.05, close_new=True):
+    before_handles = set(driver.window_handles)
+    before_current = driver.current_window_handle if before_handles else None
+
+    driver.get(url)
+
+    deadline = time.time() + max_wait
+    new_infos = []
+
+    while time.time() < deadline:
+        after_handles = set(driver.window_handles)
+
+        # 1) 새 탭/창 생김
+        diff = list(after_handles - before_handles)
+        if diff:
+            for h in diff:
+                info = {"handle": h, "url": None}
+                try:
+                    driver.switch_to.window(h)
+                    info["url"] = driver.current_url
+                    if close_new:
+                        driver.close()
+                except WebDriverException:
+                    pass
+                new_infos.append(info)
+
+            # 원래 탭으로 복귀
+            try:
+                if before_current and before_current in driver.window_handles:
+                    driver.switch_to.window(before_current)
+                elif driver.window_handles:
+                    driver.switch_to.window(driver.window_handles[0])
+            except WebDriverException:
+                pass
+
+            raise RuntimeError(f"Unexpected new tab/window opened during get(): {new_infos}")
+
+        # 2) (드물지만) 원래 탭이 사라진 경우도 비정상으로 볼 수 있음
+        if before_current and before_current not in after_handles:
+            raise RuntimeError("Original tab disappeared after get().")
+
+        time.sleep(poll)
 
     return True
         
@@ -803,7 +858,14 @@ def monitor_service(
         hard_deadline = browse_start + BROWSE_MAX_SECONDS
 
         try:
-            driver.get(url)
+
+            #driver.get(url)
+            try:
+                get_and_error_if_new_tab(driver, url, max_wait=2.0, close_new=True)
+            except RuntimeError as e:
+                print(f"[Slot-{slot_index}] ⚠️[ERR] 새 탭/창 자동 오픈 감지:{e}")
+                return
+
             clicked = click_youtube_consent_accept_all(driver)
 
             if not clicked:
