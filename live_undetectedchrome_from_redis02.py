@@ -209,9 +209,9 @@ except Exception as e:
 TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
 TARGET_URL1 = "https://www.youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
-TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
-TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
-TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
+#TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
+#TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
+#TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
 
 
 COMMAND_TIMEOUT = 300
@@ -817,6 +817,10 @@ def monitor_service(
         except TimeoutException:
             print(f"[Slot-{slot_index}] ⚠️ Get 요청 타임아웃. 로딩 상태 확인 시도.")
 
+        if _page_looks_like_error(driver) :
+            print(f"[Slot-{slot_index}] ⏰ 에러페이지로 의심. 세션 종료.")
+            return
+        
         remaining_for_load = hard_deadline - time.time()
         if remaining_for_load <= 0:
             print(f"[Slot-{slot_index}] ⏰ 브라우징 최대 시간({BROWSE_MAX_SECONDS}초) 도달(로딩 대기 중). 세션 종료.")
