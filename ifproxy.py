@@ -7,15 +7,16 @@ from collections import Counter
 # ===================== 설정 영역 =====================
 
 # 테스트할 프록시 (주석 해제하여 선택)
-#PROXY = "socks5://130.193.57.247:1080"
-PROXY = "http://36.110.143.55:8080"    #Singapore (SG)       | Type: Datacenter
+PROXY = "socks5://130.193.57.247:1080"
+#PROXY = "http://36.110.143.55:8080"    #Singapore (SG)       | Type: Datacenter
 
 #PROXY = "socks5://37.18.73.60:5566"     #datacenter|regidential
 #PROXY = "socks5://84.54.227.27:1080"
 #PROXY = "socks5://185.54.178.193:1080"
 #PROXY = "socks5://192.168.140.219:37919"
 #PROXY = "http://88.99.26.62:3128"
-PROXY = "socks5://203.25.208.163:1100"
+#PROXY = "socks5://203.25.208.163:1100"
+#PROXY = "socks5://36.110.143.55:8080"
 
 # 같은 프록시로 몇 번 테스트할지
 NUM_RUNS = 5

@@ -9,13 +9,14 @@ import random
 import logging
 import tempfile
 import threading
+import struct
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, urlunparse
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib3.connection import HTTPConnection
 
 import requests
-
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -26,352 +27,362 @@ from selenium.common.exceptions import (
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# =============================================================================
+# 0) 사용자 설정
+# =============================================================================
+MAX_THREADS = 1  
 
-# =============================================================================
-# 0) 사용자 설정 (실행 파라미터 없음: 여기만 수정)
-# =============================================================================
-# 창 크기/위치 설정
 ENABLE_WINDOW_SIZE = True
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 900
-
-ENABLE_WINDOW_JITTER = False     # True면 약간 랜덤 가감
-WINDOW_JITTER_RANGE = 80         # -80 ~ +80
-
+WINDOW_WIDTH = 600
+WINDOW_HEIGHT = 400
+ENABLE_WINDOW_JITTER = False
+WINDOW_JITTER_RANGE = 80
 ENABLE_WINDOW_POSITION = True
 WINDOW_POS_X = 50
-WINDOW_POS_Y = 50
-
-
-ENABLE_BLOCK_CHECK = False  # 기본 OFF (오탐 방지)
-
+WINDOW_POS_Y = 400
+ENABLE_BLOCK_CHECK = False 
 CHECK_INTERVAL_SECONDS = 60*30
 MAX_PAGES = 10
 
-# ✅ domain 값은 "정확한 URL 문자열"로 취급합니다.
 TASKS = [
-    {"keyword": "킹콩티비", "domain": "https://www.kingkonglive.co.kr/"},
+    {"keyword": "올빼미티비", "domain": "https://www.tvda.co.kr/?srt=1"},
 ]
 
 MAX_PROXIES_PER_TASK = 30
 REFRESH_PROXIES_EACH_CYCLE = True
 RUN_HEADLESS = False
-
 PAGELOAD_TIMEOUT_SEC = 60*2
 ELEM_WAIT_SEC = 30
+
+# 🔒 스텔스 모드 설정 (신규 추가)
+ENABLE_STEALTH = True  # 스텔스 기능 활성화 여부
+RANDOM_DELAY_MIN = 2.0  # 액션 간 최소 대기 시간(초)
+RANDOM_DELAY_MAX = 5.0  # 액션 간 최대 대기 시간(초)
+ENABLE_MOUSE_MOVEMENT = True  # 마우스 움직임 시뮬레이션
+SCROLL_BEHAVIOR = True  # 스크롤 시뮬레이션
 
 OUT_DIR = os.path.abspath("./naver_monitor_out")
 LOG_FILE = os.path.join(OUT_DIR, "monitor.log")
 RESULT_JSONL = os.path.join(OUT_DIR, "results.jsonl")
 RESULT_CSV = os.path.join(OUT_DIR, "results.csv")
-PROXY_CURSOR_FILE = os.path.join(OUT_DIR, "proxy_cursor.json")
-
+WINDOW_STATE_FILE = os.path.join(OUT_DIR, "window_states.json")  # 창 상태 저장 파일
 STOP_EVENT = threading.Event()
-
-
-# =============================================================================
-# 1) 프록시 소스 URL (요청하신 7종 그대로)
-# =============================================================================
-HTTP_PROXY_LIST_URL = (
-    "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-)
-
-SOCKS5_PROXY_LIST_URL_SPEEDX = (
-    "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks5.txt"
-)
-
-SOCKS5_PROXY_LIST_URL_PROXIFLY = (
-    "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt"
-)
-
-VAKHOV_SOCKS4_URL = "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt"
-VAKHOV_SOCKS5_URL = "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt"
-VAKHOV_HTTP_URL = "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt"
-VAKHOV_HTTPS_URL = "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/https.txt"
-
+FILE_LOCK = threading.Lock()
+WINDOW_STATE_LOCK = threading.Lock()  # 창 상태 파일 접근용 락 
 
 # =============================================================================
-# 2) 로깅
+# 1) 프록시 설정 (기본 유지)
 # =============================================================================
-def setup_logging() -> None:
-    os.makedirs(OUT_DIR, exist_ok=True)
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+ALL_SOURCES = [
+    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt", "http", False),
+    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt", "socks4", False),
+    ("https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/http.txt", "http", False),
+    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks4.txt", "socks4", False),
+    ("https://raw.githubusercontent.com/victorgeel/proxy-list-update/main/proxies/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt", "http", False),
+    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt", "socks4", False),
+    ("https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt", "socks5", False),
+]
 
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+SOURCES_KR = [
+    # 1. ProxyScrape (국가 필터 지원 - 가장 가용성 높음)
+    #("https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=KR&ssl=all&anonymity=all", "http", False),
+    #("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks4&timeout=10000&country=KR", "socks4", False),
+    #("https://api.proxyscrape.com/v2/?request=getproxies&protocol=socks5&timeout=10000&country=KR", "socks5", False),
 
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    fh.setFormatter(fmt)
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
+    # 2. Geonode (API 방식 - 한국 IP 데이터 정제가 잘 됨)
+    ("https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&country=KR&anonymityLevel=elite", "http", True),
 
-    logger.handlers.clear()
-    logger.addHandler(fh)
-    logger.addHandler(sh)
+    # 3. Spys.me (신뢰도 높은 텍스트 기반 리스트)
+    #("https://spys.me/proxy.txt", "http", False), 
 
+    # 4. Proxifly (국가별 목록 지원)
+    #("https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/KR/data.txt", "http", False),
+]
+
+#ALL_SOURCES = SOURCES_KR
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+
+linger_option = (socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+HTTPConnection.default_socket_options = HTTPConnection.default_socket_options + [linger_option]
 
 # =============================================================================
-# 3) 데이터 모델
+# 2) 데이터 모델 및 유틸 (로그 설정 강화)
 # =============================================================================
 @dataclass
 class ProxyInfo:
-    protocol: str   # http / https / socks4 / socks5
-    address: str    # ip:port
+    protocol: str
+    address: str
     source: str
-
 
 @dataclass
 class RunResult:
     ts: str
     keyword: str
     target_url: str
-
     proxy_protocol: Optional[str]
     proxy_address: Optional[str]
     proxy_source: Optional[str]
-
     found: bool
     found_page: Optional[int]
     found_rank_on_page: Optional[int]
     found_href: Optional[str]
-
     clicked_ok: bool
     final_url: Optional[str]
     error: Optional[str]
     note: Optional[str]
 
-def make_fail_result(task: Dict, proxy: ProxyInfo, error: str, note: str = None) -> RunResult:
-    return RunResult(
-        ts=datetime.now().isoformat(timespec="seconds"),
-        keyword=task["keyword"],
-        target_url=task["domain"],
-        proxy_protocol=proxy.protocol,
-        proxy_address=proxy.address,
-        proxy_source=proxy.source,
-        found=False,
-        found_page=None,
-        found_rank_on_page=None,
-        found_href=None,
-        clicked_ok=False,
-        final_url=None,
-        error=error,
-        note=note,
-    )
-
-# =============================================================================
-# 4) 프록시 수집/정규화/중복제거
-# =============================================================================
-def _normalize_addr(line: str) -> Optional[str]:
-    line = line.strip()
-    if not line or line.startswith("#"):
-        return None
-
-    if line.startswith("http://") or line.startswith("https://"):
-        addr = line.split("://", 1)[1]
-    else:
-        addr = line
-
-    addr = addr.split("/")[0].strip()
-    if ":" not in addr:
-        return None
-    return addr
-
-
-def fetch_text(url: str, timeout: int = 30) -> str:
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-    r.raise_for_status()
-    return r.text
-
-
-def fetch_http_proxy_list(url: str) -> List[ProxyInfo]:
-    proxies: List[ProxyInfo] = []
-    try:
-        txt = fetch_text(url)
-        for line in txt.splitlines():
-            addr = _normalize_addr(line)
-            if not addr:
-                continue
-            proxies.append(ProxyInfo(protocol="http", address=addr, source="proxifly_http"))
-        logging.info(f"[PROXY] HTTP 수집: {len(proxies)}개")
-    except Exception as e:
-        logging.warning(f"[PROXY] HTTP 수집 실패: {e}")
-    return proxies
-
-
-def fetch_socks5_proxy_list(url: str, source_name: str) -> List[ProxyInfo]:
-    proxies: List[ProxyInfo] = []
-    try:
-        txt = fetch_text(url)
-        for line in txt.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            addr = line.split()[0].strip()
-            if ":" not in addr:
-                continue
-            proxies.append(ProxyInfo(protocol="socks5", address=addr, source=source_name))
-        logging.info(f"[PROXY] SOCKS5 수집: {len(proxies)}개 ({source_name})")
-    except Exception as e:
-        logging.warning(f"[PROXY] SOCKS5 수집 실패: {e} ({source_name})")
-    return proxies
-
-
-def fetch_plain_proxy_list(url: str, protocol: str, source_name: str) -> List[ProxyInfo]:
-    proxies: List[ProxyInfo] = []
-    try:
-        txt = fetch_text(url)
-        for line in txt.splitlines():
-            addr = _normalize_addr(line)
-            if not addr:
-                continue
-            proxies.append(ProxyInfo(protocol=protocol, address=addr, source=source_name))
-        logging.info(f"[PROXY] {protocol.upper()} 수집: {len(proxies)}개 ({source_name})")
-    except Exception as e:
-        logging.warning(f"[PROXY] {protocol.upper()} 수집 실패: {e} ({source_name})")
-    return proxies
-
-
-def fetch_all_proxies() -> List[ProxyInfo]:
-    raw: List[ProxyInfo] = []
-
-    raw += fetch_plain_proxy_list(VAKHOV_SOCKS5_URL, "socks5", "vakhov_socks5")
-    raw += fetch_plain_proxy_list(VAKHOV_SOCKS4_URL, "socks4", "vakhov_socks4")
+def setup_logging() -> None:
+    os.makedirs(OUT_DIR, exist_ok=True)
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    # 로그 포맷에 쓰레드 이름을 명시하여 어떤 키워드 작업인지 구분 가능하게 함
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s", datefmt="%H:%M:%S")
     
-    raw += fetch_plain_proxy_list(VAKHOV_HTTP_URL, "http", "vakhov_http")
-    raw += fetch_plain_proxy_list(VAKHOV_HTTPS_URL, "https", "vakhov_https")
+    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    fh.setFormatter(fmt)
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    
+    logger.handlers.clear()
+    logger.addHandler(fh)
+    logger.addHandler(sh)
 
-    raw += fetch_http_proxy_list(HTTP_PROXY_LIST_URL)
-    raw += fetch_socks5_proxy_list(SOCKS5_PROXY_LIST_URL_SPEEDX, "speedx_socks5")
-    raw += fetch_socks5_proxy_list(SOCKS5_PROXY_LIST_URL_PROXIFLY, "proxifly_socks5")
-
-    uniq: Dict[Tuple[str, str], ProxyInfo] = {}
-    for p in raw:
-        key = (p.protocol, p.address)
-        if key not in uniq:
-            uniq[key] = p
-
-    proxies = list(uniq.values())
-    logging.info(f"[PROXY] 총 프록시(중복 제거): {len(proxies)}개")
-    return proxies
-
-
-def load_proxy_cursor() -> int:
+# =============================================================================
+# 2-1) 🔒 스텔스 유틸리티 함수 (신규 추가)
+# =============================================================================
+def load_window_state(slot_id: str) -> Optional[Dict]:
+    """
+    슬롯별 창 위치/크기 상태 로드
+    """
     try:
-        if os.path.exists(PROXY_CURSOR_FILE):
-            with open(PROXY_CURSOR_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return int(data.get("cursor", 0))
-    except Exception:
-        pass
-    return 0
-
-
-def save_proxy_cursor(cursor: int) -> None:
-    try:
-        with open(PROXY_CURSOR_FILE, "w", encoding="utf-8") as f:
-            json.dump({"cursor": cursor}, f, ensure_ascii=False, indent=2)
+        with WINDOW_STATE_LOCK:
+            if os.path.exists(WINDOW_STATE_FILE):
+                with open(WINDOW_STATE_FILE, 'r', encoding='utf-8') as f:
+                    states = json.load(f)
+                    return states.get(slot_id)
     except Exception as e:
-        logging.warning(f"[PROXY] cursor 저장 실패: {e}")
+        logging.warning(f"⚠️ 창 상태 로드 실패 (슬롯 {slot_id}): {e}")
+    return None
 
+def save_window_state(slot_id: str, x: int, y: int, width: int, height: int) -> None:
+    """
+    슬롯별 창 위치/크기 상태 저장
+    """
+    try:
+        with WINDOW_STATE_LOCK:
+            states = {}
+            if os.path.exists(WINDOW_STATE_FILE):
+                with open(WINDOW_STATE_FILE, 'r', encoding='utf-8') as f:
+                    states = json.load(f)
+            
+            states[slot_id] = {
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height
+            }
+            
+            with open(WINDOW_STATE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(states, f, indent=2)
+            
+            logging.info(f"💾 창 상태 저장 완료 (슬롯 {slot_id}): 위치({x},{y}) 크기({width}x{height})")
+    except Exception as e:
+        logging.warning(f"⚠️ 창 상태 저장 실패 (슬롯 {slot_id}): {e}")
 
-def pick_next_proxy(proxies: List[ProxyInfo], cursor: int) -> Tuple[Optional[ProxyInfo], int]:
-    if not proxies:
-        return None, cursor
-    p = proxies[cursor % len(proxies)]
-    cursor += 1
-    return p, cursor
+def random_delay(min_sec: float = None, max_sec: float = None) -> None:
+    """
+    인간처럼 보이기 위한 랜덤 딜레이
+    """
+    if not ENABLE_STEALTH:
+        return
+    min_val = min_sec if min_sec is not None else RANDOM_DELAY_MIN
+    max_val = max_sec if max_sec is not None else RANDOM_DELAY_MAX
+    delay = random.uniform(min_val, max_val)
+    time.sleep(delay)
 
+def simulate_human_typing(element, text: str) -> None:
+    """
+    사람처럼 한 글자씩 타이핑하는 효과
+    """
+    if not ENABLE_STEALTH:
+        element.send_keys(text)
+        return
+    
+    for char in text:
+        element.send_keys(char)
+        time.sleep(random.uniform(0.05, 0.15))  # 글자당 50~150ms 딜레이
+
+def simulate_scroll(driver, scroll_count: int = 3) -> None:
+    """
+    페이지를 천천히 스크롤하여 인간 행동 시뮬레이션
+    """
+    if not ENABLE_STEALTH or not SCROLL_BEHAVIOR:
+        return
+    
+    for _ in range(scroll_count):
+        scroll_amount = random.randint(200, 500)
+        driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
+        time.sleep(random.uniform(0.3, 0.8))
+
+def get_random_user_agent() -> str:
+    """
+    랜덤 User-Agent 생성 (다양한 브라우저 버전)
+    """
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    ]
+    return random.choice(user_agents)
+
+def inject_stealth_scripts(driver) -> None:
+    """
+    🔒 고급 스텔스 스크립트 주입
+    - webdriver 속성 숨김
+    - navigator 속성 조작
+    - 자동화 감지 우회
+    """
+    if not ENABLE_STEALTH:
+        return
+    
+    # 1. webdriver 속성 제거
+    stealth_js = """
+    // webdriver 속성 숨기기
+    Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined
+    });
+    
+    // Chrome 관련 속성 추가
+    window.chrome = {
+        runtime: {}
+    };
+    
+    // Permissions API 조작
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+    );
+    
+    // Plugin 배열 수정
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5]
+    });
+    
+    // Languages 설정
+    Object.defineProperty(navigator, 'languages', {
+        get: () => ['ko-KR', 'ko', 'en-US', 'en']
+    });
+    
+    // WebGL Vendor 정보 수정
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+        if (parameter === 37445) {
+            return 'Intel Inc.';
+        }
+        if (parameter === 37446) {
+            return 'Intel Iris OpenGL Engine';
+        }
+        return getParameter.apply(this, [parameter]);
+    };
+    
+    // 자동화 감지 메서드 덮어쓰기
+    window.navigator.chrome = {
+        runtime: {},
+    };
+    
+    // console.debug 숨김 (Selenium 흔적 제거)
+    const originalDebug = console.debug;
+    console.debug = function() {};
+    """
+    
+    try:
+        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+            'source': stealth_js
+        })
+        logging.info("🔒 스텔스 스크립트 주입 완료")
+    except Exception as e:
+        logging.warning(f"⚠️ 스텔스 스크립트 주입 실패 (undetected-chromedriver가 일부 처리): {e}")
+
+# =============================================================================
+# 3) 프록시 수집 및 검증 (기존 유지)
+# =============================================================================
+def fetch_all_proxies() -> List[ProxyInfo]:
+    logging.info("📄 [수집] 프록시 수집 시작 (텍스트/JSON 프로토콜 매칭 최적화)")
+    raw_list = []
+    
+    for url, default_proto, _ in ALL_SOURCES:
+        if STOP_EVENT.is_set(): break
+        try:
+            resp = requests.get(url, timeout=20, headers=HEADERS)
+            if resp.status_code != 200: continue
+            
+            content = resp.text.strip()
+            count = 0
+            
+            # 1️⃣ JSON 형식 (Geonode 등)
+            if content.startswith('{') or content.startswith('['):
+                try:
+                    data = resp.json()
+                    items = data.get('data', []) if isinstance(data, dict) else data
+                    for item in items:
+                        if isinstance(item, dict) and 'ip' in item and 'port' in item:
+                            addr = f"{item['ip']}:{item['port']}"
+                            # JSON 내 protocols 우선 확인, 없으면 소스 정의 기본값(default_proto) 사용
+                            actual_proto = default_proto
+                            if 'protocols' in item and item['protocols']:
+                                actual_proto = item['protocols'][0].lower()
+                            
+                            raw_list.append(ProxyInfo(protocol=actual_proto, address=addr, source=urlparse(url).netloc))
+                            count += 1
+                except: pass
+            
+            # 2️⃣ 일반 텍스트 형식 (프로토콜 정보가 없는 경우 대응)
+            else:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith('#'): continue
+                    
+                    # 주소만 있는 경우(1.2.3.4:80)를 대비해 무조건 default_proto 적용
+                    addr = line.split("://")[-1] if "://" in line else line
+                    if ":" in addr:
+                        # 텍스트 목록은 소스 리스트 옆에 적어둔 프로토콜(http, socks5 등)을 강제 부여
+                        raw_list.append(ProxyInfo(protocol=default_proto, address=addr, source=urlparse(url).netloc))
+                        count += 1
+            
+            if count > 0:
+                logging.info(f"📥 [수집] {urlparse(url).netloc:20s} | {count:4d}개 ({default_proto})")
+                
+        except Exception as e:
+            logging.error(f"⚠️ [실패] {urlparse(url).netloc}: {e}")
+            
+    # 중복 제거
+    uniq = {(p.protocol, p.address): p for p in raw_list}
+    proxies = list(uniq.values())
+    logging.info(f"📊 [최종] 총 {len(proxies)}개의 고유 프록시 로드 완료")
+    return proxies
 
 def tcp_quick_check(addr: str, timeout: float = 2.0) -> bool:
     try:
         host, port_s = addr.split(":", 1)
         port = int(port_s)
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except Exception:
-        return False
-
+        with socket.create_connection((host, port), timeout=timeout): return True
+    except Exception: return False
 
 # =============================================================================
-# 5) URL “정확 매칭(루트만)” 로직 ✅ 핵심 변경
+# 4) 브라우저 드라이버 생성 (🔒 스텔스 강화)
 # =============================================================================
-def canonicalize_root_url(url: str) -> str:
-    """
-    비교용 정규화:
-    - scheme/host는 소문자
-    - path는 ''면 '/'로
-    - query/fragment 제거
-    - '루트(/)'만 허용하는 비교를 위해 path는 '/'만 유지
-    """
-    u = urlparse(url.strip())
-    scheme = (u.scheme or "").lower()
-    netloc = (u.netloc or "").lower()
-
-    path = u.path or "/"
-    if path == "":
-        path = "/"
-
-    # 루트만 허용: '/something'이면 그대로 두고 나중에 reject
-    # query/fragment는 비교에서는 제거
-    return urlunparse((scheme, netloc, path, "", "", ""))
-
-
-def is_exact_root_target_href(href: str, target_url: str) -> bool:
-    """
-    ✅ 요구사항:
-    - href가 타겟과 "정확히 루트 URL" 이어야 함
-    - 즉, 타겟이 https://www.kingkonglive.co.kr/ 이면
-      href도 scheme+host 동일 + path가 '/'(또는 '') 이어야 통과
-    - /aaa 같은 하위 경로는 무조건 False
-    """
-    if not href or not target_url:
-        return False
-
-    try:
-        h = canonicalize_root_url(href)
-        t = canonicalize_root_url(target_url)
-
-        hu = urlparse(h)
-        tu = urlparse(t)
-
-        # scheme, host 동일해야 함
-        if hu.scheme != tu.scheme or hu.netloc != tu.netloc:
-            return False
-
-        # 루트만 허용
-        if (hu.path or "/") != "/":
-            return False
-        if (tu.path or "/") != "/":
-            # 타겟 자체가 /가 아니면, “정확히 그 경로”로 바꿀 수도 있으나
-            # 지금 요구사항이 루트 고정이라 타겟도 /이어야 정상
-            return False
-
-        # 여기까지 오면 동일 루트
-        return True
-    except Exception:
-        return False
-
-
-# =============================================================================
-# 6) 네이버 검색
-# =============================================================================
-NAVER_HOME = "https://www.naver.com/"
-
-
-def build_proxy_server_arg(p: ProxyInfo) -> str:
-    if p.protocol in ("http", "https"):
-        return f"http://{p.address}"
-    if p.protocol == "socks5":
-        return f"socks5://{p.address}"
-    if p.protocol == "socks4":
-        return f"socks4://{p.address}"
-    return f"http://{p.address}"
-
-
-def make_driver(proxy: Optional[ProxyInfo]) -> Tuple[uc.Chrome, str]:
+def make_driver(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chrome, str]:
     profile_dir = tempfile.mkdtemp(prefix="naver_mon_profile_")
-
     options = uc.ChromeOptions()
+    
+    # 기본 옵션
     options.add_argument(f"--user-data-dir={profile_dir}")
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
@@ -380,525 +391,293 @@ def make_driver(proxy: Optional[ProxyInfo]) -> Tuple[uc.Chrome, str]:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
     options.add_argument("--lang=ko-KR")
-
-    if RUN_HEADLESS:
+    
+    # 🔒 스텔스 옵션 추가
+    if ENABLE_STEALTH:
+        options.add_argument("--disable-blink-features=AutomationControlled")  # 자동화 감지 비활성화
+        options.add_argument("--disable-web-security")  # CORS 우회 (선택)
+        options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--profile-directory=Default")
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--disable-gpu")  # GPU 가속 비활성화
+        
+        # 랜덤 User-Agent 설정
+        user_agent = get_random_user_agent()
+        options.add_argument(f"--user-agent={user_agent}")
+        logging.info(f"🎭 랜덤 User-Agent 적용: {user_agent[:50]}...")
+    
+    if RUN_HEADLESS: 
         options.add_argument("--headless=new")
-
+    
+    # 프록시 설정
     if proxy:
-        proxy_arg = build_proxy_server_arg(proxy)
-        ##############################
-        #proxy_arg = "socks5://36.110.143.55:8080"
-        #############################
-        options.add_argument(f"--proxy-server={proxy_arg}")
+        proxy_str = f"{proxy.protocol}://{proxy.address}"
+        logging.info(f"🌐 [드라이버 생성] 프록시 적용: {proxy_str} (출처: {proxy.source})")
+        options.add_argument(f"--proxy-server={proxy_str}")
+    else:
+        logging.info("🌐 [드라이버 생성] 프록시 미사용 (Direct 연결)")
 
+    # 드라이버 생성
     driver = uc.Chrome(options=options, use_subprocess=True)
     driver.set_page_load_timeout(PAGELOAD_TIMEOUT_SEC)
-    # ✅ 창 크기/위치 적용
+    
+    # 🔒 스텔스 스크립트 주입
+    if ENABLE_STEALTH:
+        inject_stealth_scripts(driver)
+    
+    # 📍 저장된 창 상태 로드 및 적용
+    saved_state = load_window_state(slot_id)
+    
     try:
-        if ENABLE_WINDOW_SIZE:
-            w, h = WINDOW_WIDTH, WINDOW_HEIGHT
-            if ENABLE_WINDOW_JITTER:
-                w += random.randint(-WINDOW_JITTER_RANGE, WINDOW_JITTER_RANGE)
-                h += random.randint(-WINDOW_JITTER_RANGE, WINDOW_JITTER_RANGE)
-                w = max(300, w)
-                h = max(300, h)
-            driver.set_window_size(w, h)
-
-        if ENABLE_WINDOW_POSITION:
-            driver.set_window_position(WINDOW_POS_X, WINDOW_POS_Y)
+        if saved_state:
+            # 저장된 위치와 크기가 있으면 복원
+            logging.info(f"📍 슬롯 {slot_id}: 저장된 창 상태 복원 중... 위치({saved_state['x']},{saved_state['y']}) 크기({saved_state['width']}x{saved_state['height']})")
+            driver.set_window_size(saved_state['width'], saved_state['height'])
+            driver.set_window_position(saved_state['x'], saved_state['y'])
+        else:
+            # 저장된 상태가 없으면 기본 설정 적용
+            if ENABLE_WINDOW_SIZE:
+                w, h = WINDOW_WIDTH, WINDOW_HEIGHT
+                if ENABLE_WINDOW_JITTER:
+                    w += random.randint(-WINDOW_JITTER_RANGE, WINDOW_JITTER_RANGE)
+                    h += random.randint(-WINDOW_JITTER_RANGE, WINDOW_JITTER_RANGE)
+                driver.set_window_size(max(300, w), max(300, h))
+            if ENABLE_WINDOW_POSITION:
+                driver.set_window_position(WINDOW_POS_X, WINDOW_POS_Y)
+            logging.info(f"📍 슬롯 {slot_id}: 기본 창 설정 적용")
     except Exception as e:
-        logging.warning(f"[WINDOW] set size/position failed: {e}")
-
+        logging.warning(f"⚠️ 창 설정 적용 실패: {e}")
+    
     return driver, profile_dir
-
-
-def safe_write_debug(driver, prefix: str) -> None:
-    try:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        ddir = os.path.join(OUT_DIR, "debug")
-        os.makedirs(ddir, exist_ok=True)
-
-        png = os.path.join(ddir, f"{prefix}_{ts}.png")
-        html = os.path.join(ddir, f"{prefix}_{ts}.html")
-
-        driver.save_screenshot(png)
-        with open(html, "w", encoding="utf-8") as f:
-            f.write(driver.page_source or "")
-    except Exception:
-        pass
-
-
-def looks_like_block_or_captcha(driver, context: str = "") -> bool:
-    if not ENABLE_BLOCK_CHECK:
-        return False
-    """
-    ✅ 'captchaApi' 같은 설정 문자열 때문에 오탐하지 않도록,
-    '실제 캡차 UI/차단 UI가 화면에 존재/표시되는지' 위주로 판별.
-    """
-    def _tag(ctx: str) -> str:
-        return f"[BLOCK?]{'['+ctx+']' if ctx else ''}"
-
-    try:
-        url = (driver.current_url or "")
-        url_l = url.lower()
-        title = (driver.title or "")
-
-        # 1) URL이 대놓고 캡차/차단이면 바로 True
-        url_hits = [k for k in ["captcha", "blocked", "denied"] if k in url_l]
-        if url_hits:
-            logging.warning(f"{_tag(context)} URL 키워드 감지: hits={url_hits}, url={url}, title='{title}'")
-            return True
-
-        # 2) '캡차 이미지/iframe/입력' 같은 실제 UI 요소가 화면에 표시되는지 확인
-        captcha_selectors = [
-            "img[src*='captcha.nid.naver.com']",
-            "iframe[src*='captcha']",
-            "input[name*='captcha']",
-            "input[id*='captcha']",
-        ]
-        for sel in captcha_selectors:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            if any(e.is_displayed() for e in els):
-                logging.warning(f"{_tag(context)} 캡차 UI 표시 감지: selector={sel}, url={url}, title='{title}'")
-                return True
-
-        # 3) 화면에 '자동입력 방지', '로봇이 아닙니다' 같은 문구가 "가시 텍스트"로 보이면 True
-        visible_text = (driver.find_element(By.TAG_NAME, "body").text or "").strip()
-        text_hits = []
-        for needle in ["자동입력", "자동 입력", "로봇", "비정상", "접속이 제한", "접속이 차단"]:
-            if needle in visible_text:
-                text_hits.append(needle)
-        if text_hits:
-            snippet = visible_text[:200].replace("\n", " ")
-            logging.warning(f"{_tag(context)} 가시 텍스트 차단 문구 감지: hits={text_hits}, url={url}, title='{title}', text='{snippet}...'")
-            return True
-
-        # 4) 마지막 보루: 페이지 소스에 captcha 문자열이 있어도,
-        #    검색 결과 컨테이너가 정상적으로 있으면 '정상'으로 간주(오탐 방지)
-        #    (네이버는 설정에 captchaApi가 포함될 수 있음)
-        has_results = False
-        for sel in ["#main_pack", "#content", "#wrap"]:
-            try:
-                if driver.find_elements(By.CSS_SELECTOR, sel):
-                    has_results = True
-                    break
-            except Exception:
-                pass
-
-        src_l = (driver.page_source or "").lower()
-        if ("captcha" in src_l or "captcha.nid.naver.com" in src_l) and not has_results:
-            logging.warning(f"{_tag(context)} captcha 문자열 + 결과컨테이너 부재 -> 차단 의심. url={url}, title='{title}'")
-            return True
-
-        # 정상
-        return False
-
-    except Exception as e:
-        logging.warning(f"{_tag(context)} 판별 중 예외 -> 차단으로 간주: {e}")
-        return True
-
-
-
 
 def update_query_param(url: str, **kwargs) -> str:
     u = urlparse(url)
     q = parse_qs(u.query)
-    for k, v in kwargs.items():
-        q[str(k)] = [str(v)]
-    new_query = urlencode(q, doseq=True)
-    return urlunparse((u.scheme, u.netloc, u.path, u.params, new_query, u.fragment))
+    for k, v in kwargs.items(): q[str(k)] = [str(v)]
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, urlencode(q, doseq=True), u.fragment))
 
-def wait_page_fully_loaded(driver, timeout=20):
-    # DOM 로딩 완료(readyState=complete)까지 대기
-    WebDriverWait(driver, timeout).until(
-        lambda d: d.execute_script("return document.readyState") == "complete"
-    )
-
-from urllib.parse import urlparse
-
-def assert_https_url(driver, expected_hosts: list[str], context: str):
-    """
-    현재 페이지가 HTTPS + 기대 host 중 하나인지 확인.
-    아니면 예외 발생(=실패 처리).
-    """
-    cur = (driver.current_url or "").strip()
-    u = urlparse(cur)
-    scheme = (u.scheme or "").lower()
-    host = (u.netloc or "").lower()
-
-    if scheme != "https":
-        raise RuntimeError(f"{context}_NOT_HTTPS: {cur}")
-
-    if expected_hosts and host not in [h.lower() for h in expected_hosts]:
-        raise RuntimeError(f"{context}_UNEXPECTED_HOST: {cur}")
-
-def detect_chrome_ssl_error(driver) -> str | None:
-    """
-    Chrome의 '개인 정보 보호 오류(인증서 오류)' / 크롬 에러 페이지 감지.
-    감지되면 에러코드 문자열을 반환, 아니면 None.
-    """
-    try:
-        cur = (driver.current_url or "").lower()
-        title = (driver.title or "").strip()
-
-        # Chrome 내부 에러 페이지 URL
-        if cur.startswith("chrome-error://") or "chromewebdata" in cur:
-            src = (driver.page_source or "").lower()
-            # 대표적인 SSL/인증서 에러 키워드
-            for code in [
-                "net::err_cert_authority_invalid",
-                "net::err_cert_common_name_invalid",
-                "net::err_cert_date_invalid",
-                "net::err_ssl_protocol_error",
-                "net::err_cert_invalid",
-                "net::err_connection_closed",
-            ]:
-                if code in src:
-                    return code.upper()
-            return "CHROME_ERROR_PAGE"
-
-        # 제목/본문으로도 한 번 더(언어/표현 바뀔 수 있음)
-        if "개인 정보 보호 오류" in title or "your connection is not private" in title.lower():
-            src = (driver.page_source or "").lower()
-            if "net::err_cert" in src:
-                # 어떤 코드인지 있으면 잡아줌
-                m = re.search(r"net::err_[a-z0-9_]+", src)
-                return (m.group(0) if m else "NET::ERR_CERT_*").upper()
-            return "PRIVACY_ERROR_PAGE"
-
-        return None
-    except Exception:
-        return None
+# =============================================================================
+# 5) 작업 로직 (🔒 스텔스 행동 패턴 추가)
+# =============================================================================
+def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
+    keyword, target_url = task["keyword"], task["domain"]
+    logging.info(f"▶️ 작업 시작 | 슬롯: {slot_id} | 키워드: [{keyword}] | 프록시: {proxy.address}")
     
-def search_on_naver_home(driver, keyword: str) -> str:
-    driver.get(NAVER_HOME)
-    wait_page_fully_loaded(driver, timeout=PAGELOAD_TIMEOUT_SEC)
-
-    ssl_err = detect_chrome_ssl_error(driver)
-    if ssl_err:
-        raise RuntimeError(f"NAVER_HOME_SSL_ERROR:{ssl_err}")
-
-    # ✅ 네이버 메인은 반드시 HTTPS여야 함 (http면 바로 실패)
-    assert_https_url(driver, expected_hosts=["www.naver.com", "naver.com"], context="NAVER_HOME")
+    driver, profile_dir = None, ""
+    rr = RunResult(datetime.now().isoformat(timespec="seconds"), keyword, target_url, proxy.protocol, proxy.address, proxy.source, False, None, None, None, False, None, None, None)
     
-    if looks_like_block_or_captcha(driver):
-        raise RuntimeError("NAVER_HOME_BLOCK_OR_CAPTCHA")
-
-
-    candidates = [
-        (By.CSS_SELECTOR, "input#query"),
-        (By.CSS_SELECTOR, "input[name='query']"),
-        (By.CSS_SELECTOR, "input[type='search']"),
-    ]
-
-    box = None
-    for by, sel in candidates:
-        try:
-            box = WebDriverWait(driver, ELEM_WAIT_SEC).until(
-                EC.presence_of_element_located((by, sel))
-            )
-            if box:
-                break
-        except TimeoutException:
-            continue
-
-    if not box:
-        raise RuntimeError("NAVER_SEARCHBOX_NOT_FOUND")
-
-    box.clear()
-    box.send_keys(keyword)
-    box.send_keys(Keys.ENTER)
-
-    WebDriverWait(driver, ELEM_WAIT_SEC).until(
-        lambda d: "search.naver.com" in (d.current_url or "")
-    )
-
-    if looks_like_block_or_captcha(driver):
-        raise RuntimeError("NAVER_SEARCH_BLOCK_OR_CAPTCHA")
-
-    return driver.current_url
-
-
-def find_target_in_current_page(driver, target_url: str) -> Optional[Tuple[int, str]]:
-    """
-    ✅ 변경:
-    - target_url과 "정확히 루트 일치"하는 href만 인정
-    - /aaa 같은 하위 경로는 제외
-    """
-    anchors = []
-    for css in ["#main_pack a[href]", "#content a[href]", "a[href]"]:
-        try:
-            anchors = driver.find_elements(By.CSS_SELECTOR, css)
-            if anchors:
-                break
-        except Exception:
-            continue
-
-    rank = 0
-    for a in anchors:
-        try:
-            href = a.get_attribute("href") or ""
-            if not href:
-                continue
-
-            # rank는 “전체 a[href]” 기준으로 카운팅(원하면 매칭 후보만 카운팅하게 바꿀 수 있음)
-            rank += 1
-
-            if is_exact_root_target_href(href, target_url):
-                return rank, href
-        except Exception:
-            continue
-    return None
-
-
-def verify_click_and_open(driver, href: str, target_url: str) -> Tuple[bool, Optional[str], Optional[str]]:
-    """
-    ✅ 변경:
-    - 클릭 후 최종 URL도 “타겟 루트 URL”로 정규화했을 때 동일해야 성공
-    """
     try:
-        driver.get(href)
-        WebDriverWait(driver, ELEM_WAIT_SEC).until(
-            lambda d: (d.execute_script("return document.readyState") in ("interactive", "complete"))
-        )
+        # 1. TCP 체크
+        if not tcp_quick_check(proxy.address):
+            logging.warning(f"❌ TCP 연결 실패: {proxy.address}")
+            rr.error = "TCP_CONNECT_FAIL"
+        else:
+            logging.info(f"🌐 브라우저 실행 중... (슬롯 {slot_id}, 프록시 {proxy.address})")
+            driver, profile_dir = make_driver(proxy, slot_id)
+            
+            # 🔒 초기 딜레이 (봇 감지 회피)
+            random_delay(1.0, 2.0)
+            
+            logging.info(f"🔍 네이버 접속 및 키워드 검색: [{keyword}]")
+            driver.get("https://www.naver.com/")
+            WebDriverWait(driver, ELEM_WAIT_SEC).until(lambda d: d.execute_script("return document.readyState") in ("interactive", "complete"))
+            
+            # 🔒 페이지 로딩 후 자연스러운 대기
+            random_delay(1.5, 3.0)
+            
+            # 🔒 스크롤 시뮬레이션
+            simulate_scroll(driver, scroll_count=2)
+            
+            box = WebDriverWait(driver, ELEM_WAIT_SEC).until(EC.presence_of_element_located((By.NAME, "query")))
+            box.clear()
+            
+            # 🔒 인간처럼 타이핑
+            simulate_human_typing(box, keyword)
+            
+            # 🔒 엔터 전 짧은 대기
+            random_delay(0.5, 1.0)
+            box.send_keys(Keys.ENTER)
+            
+            WebDriverWait(driver, ELEM_WAIT_SEC).until(lambda d: "search.naver.com" in (d.current_url or ""))
+            results_url = driver.current_url
+            
+            # 🔒 검색 결과 로딩 대기
+            random_delay(2.0, 4.0)
+            
+            # 2. 페이지 순회
+            for page in range(1, MAX_PAGES + 1):
+                if STOP_EVENT.is_set(): break
+                
+                logging.info(f"📄 페이지 탐색 중... ({page}/{MAX_PAGES} page)")
+                driver.get(update_query_param(results_url, start=1 + (page - 1) * 10))
+                
+                # 🔒 페이지 로딩 대기
+                random_delay(2.0, 3.5)
+                
+                # 🔒 스크롤 시뮬레이션
+                simulate_scroll(driver, scroll_count=3)
+                
+                # 타겟 탐색
+                found_data = None
+                anchors = driver.find_elements(By.CSS_SELECTOR, "a[href]")
+                for idx, a in enumerate(anchors, 1):
+                    try:
+                        href = a.get_attribute("href") or ""
+                        # URL 정규화 및 비교
+                        if href and target_url:
+                            h_can = urlunparse((urlparse(href).scheme, urlparse(href).netloc, urlparse(href).path or "/", "", "", ""))
+                            t_can = urlunparse((urlparse(target_url).scheme, urlparse(target_url).netloc, urlparse(target_url).path or "/", "", "", ""))
+                            if h_can.lower() == t_can.lower():
+                                found_data = (idx, href)
+                                break
+                    except: continue
+                
+                if found_data:
+                    rank, href = found_data
+                    logging.info(f"✨ 타겟 발견! | {page}페이지 {rank}위 | URL: {href[:50]}...")
+                    rr.found, rr.found_page, rr.found_rank_on_page, rr.found_href = True, page, rank, href
+                    
+                    # 🔒 클릭 전 자연스러운 대기
+                    random_delay(1.0, 2.5)
+                    
+                    logging.info("🖱️ 타겟 링크 클릭 및 검증 중...")
+                    driver.get(href)
+                    WebDriverWait(driver, 10).until(lambda d: d.execute_script("return document.readyState") in ("interactive", "complete"))
+                    
+                    # 🔒 페이지 도착 후 대기
+                    random_delay(2.0, 3.0)
+                    
+                    final_url = driver.current_url
+                    # 최종 URL 검증
+                    h_final = urlunparse((urlparse(final_url).scheme, urlparse(final_url).netloc, urlparse(final_url).path or "/", "", "", ""))
+                    t_can = urlunparse((urlparse(target_url).scheme, urlparse(target_url).netloc, urlparse(target_url).path or "/", "", "", ""))
+                    
+                    if h_final.lower() == t_can.lower():
+                        logging.info(f"✅ 클릭 성공: 최종 목적지 확인됨 ({h_final})")
+                        rr.clicked_ok, rr.final_url = True, final_url
+                    else:
+                        logging.error(f"⚠️ 목적지 불일치 | 현재: {h_final}")
+                        rr.clicked_ok, rr.final_url, rr.note = False, final_url, "FINAL_URL_NOT_MATCH"
+                    break
+                
+                # 🔒 다음 페이지로 넘어가기 전 대기
+                if page < MAX_PAGES:
+                    random_delay(1.5, 3.0)
+            
+            if not rr.found and not rr.error:
+                logging.info(f"🔎 탐색 종료: {MAX_PAGES}페이지 내에 타겟이 없습니다.")
+                rr.error = "NOT_FOUND_IN_PAGES"
 
-        if looks_like_block_or_captcha(driver):
-            return False, driver.current_url, "BLOCK_OR_CAPTCHA_AFTER_CLICK"
-
-        final_url = driver.current_url
-
-        # 최종 URL도 루트 정확 일치해야 성공
-        if final_url and is_exact_root_target_href(final_url, target_url):
-            return True, final_url, None
-
-        return False, final_url, "FINAL_URL_NOT_EXACT_ROOT_TARGET"
-    except TimeoutException:
-        return False, driver.current_url, "TIMEOUT_AFTER_CLICK"
-    except WebDriverException as e:
-        return False, driver.current_url, f"WEBDRIVER_AFTER_CLICK:{str(e)[:120]}"
     except Exception as e:
-        return False, driver.current_url, f"ERROR_AFTER_CLICK:{str(e)[:120]}"
-
-
-def run_one_task_with_proxy(task: Dict, proxy: ProxyInfo) -> RunResult:
-    keyword = task["keyword"]
-    # ✅ domain을 “정확 타겟 URL”로 사용
-    target_url = task["domain"]
-
-    driver = None
-    profile_dir = ""
-    results_url = None
-
-    rr = RunResult(
-        ts=datetime.now().isoformat(timespec="seconds"),
-        keyword=keyword,
-        target_url=target_url,
-        proxy_protocol=proxy.protocol,
-        proxy_address=proxy.address,
-        proxy_source=proxy.source,
-        found=False,
-        found_page=None,
-        found_rank_on_page=None,
-        found_href=None,
-        clicked_ok=False,
-        final_url=None,
-        error=None,
-        note=None,
-    )
-
-    try:
-        driver, profile_dir = make_driver(proxy)
-
-        # 1) 네이버 메인 -> 검색
-        results_url = search_on_naver_home(driver, keyword)
-
-        # 2) 1~MAX_PAGES 순회
-        for page in range(1, MAX_PAGES + 1):
-            if STOP_EVENT.is_set():
-                rr.error = "INTERRUPTED"
-                return rr
-
-            start = 1 + (page - 1) * 10
-            page_url = update_query_param(results_url, start=start)
-
-            driver.get(page_url)
-            if looks_like_block_or_captcha(driver):
-                rr.error = "BLOCK_OR_CAPTCHA_ON_RESULTS"
-                safe_write_debug(driver, "blocked_results")
-                return rr
-
-            found = find_target_in_current_page(driver, target_url)
-            if not found:
-                continue
-
-            rank_on_page, href = found
-            rr.found = True
-            rr.found_page = page
-            rr.found_rank_on_page = rank_on_page
-            rr.found_href = href
-
-            # 3) 클릭/접속 확인
-            clicked_ok, final_url, err = verify_click_and_open(driver, href, target_url)
-            rr.clicked_ok = clicked_ok
-            rr.final_url = final_url
-            rr.note = err
-
-            if not clicked_ok:
-                safe_write_debug(driver, "click_failed")
-            return rr
-
-        rr.found = False
-        rr.error = "NOT_FOUND_EXACT_ROOT_URL_IN_1_TO_10"
-        return rr
-
-    except TimeoutException:
-        rr.error = "TIMEOUT"
-        if driver:
-            safe_write_debug(driver, "timeout")
-        return rr
-    except WebDriverException as e:
-        rr.error = f"WEBDRIVER:{str(e)[:160]}"
-        return rr
-    except Exception as e:
-        rr.error = f"ERROR:{str(e)[:160]}"
-        if driver:
-            safe_write_debug(driver, "error")
-        return rr
+        logging.error(f"💥 예외 발생: {str(e)[:100]}")
+        rr.error = str(e)[:160]
     finally:
-        try:
-            if driver:
-                ################
-                #sleep_interruptible(5)
-                ################
-                driver.quit()
-        except Exception:
-            pass
-        try:
-            if profile_dir and os.path.isdir(profile_dir):
-                shutil.rmtree(profile_dir, ignore_errors=True)
-        except Exception:
-            pass
-
-
-# =============================================================================
-# 7) 결과 저장
-# =============================================================================
-def append_jsonl(path: str, data: Dict) -> None:
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(data, ensure_ascii=False) + "\n")
-
-
-def ensure_csv_header(path: str) -> None:
-    if os.path.exists(path) and os.path.getsize(path) > 0:
-        return
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow([
-            "ts", "keyword", "target_url",
-            "proxy_protocol", "proxy_address", "proxy_source",
-            "found", "found_page", "found_rank_on_page", "found_href",
-            "clicked_ok", "final_url", "error", "note"
-        ])
-
-
-def append_csv(path: str, rr: RunResult) -> None:
-    ensure_csv_header(path)
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow([
-            rr.ts, rr.keyword, rr.target_url,
-            rr.proxy_protocol, rr.proxy_address, rr.proxy_source,
-            rr.found, rr.found_page, rr.found_rank_on_page, rr.found_href,
-            rr.clicked_ok, rr.final_url, rr.error, rr.note
-        ])
-
+        # 📍 창 상태 저장 (드라이버 종료 전)
+        if driver:
+            try:
+                pos = driver.get_window_position()
+                size = driver.get_window_size()
+                save_window_state(slot_id, pos['x'], pos['y'], size['width'], size['height'])
+            except Exception as e:
+                logging.warning(f"⚠️ 창 상태 추출 실패 (슬롯 {slot_id}): {e}")
+            
+            try: driver.quit()
+            except: pass
+        
+        if profile_dir: 
+            try: shutil.rmtree(profile_dir, ignore_errors=True)
+            except: pass
+        
+        # 락을 사용한 결과 저장
+        with FILE_LOCK:
+            with open(RESULT_JSONL, "a", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(rr), ensure_ascii=False) + "\n")
+            is_new = not os.path.exists(RESULT_CSV)
+            with open(RESULT_CSV, "a", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                if is_new: w.writerow(["ts", "keyword", "target_url", "proxy_protocol", "proxy_address", "proxy_source", "found", "found_page", "found_rank_on_page", "found_href", "clicked_ok", "final_url", "error", "note"])
+                w.writerow([rr.ts, rr.keyword, rr.target_url, rr.proxy_protocol, rr.proxy_address, rr.proxy_source, rr.found, rr.found_page, rr.found_rank_on_page, rr.found_href, rr.clicked_ok, rr.final_url, rr.error, rr.note])
+        
+        status = "성공" if rr.found else f"실패({rr.error})"
+        logging.info(f"🏁 작업 종료 | 슬롯: {slot_id} | 키워드: [{keyword}] | 결과: {status}")
 
 # =============================================================================
-# 8) 메인 루프 (데몬)
+# 6) 메인 루프
 # =============================================================================
-def sleep_interruptible(seconds: int) -> None:
-    for _ in range(seconds):
-        if STOP_EVENT.is_set():
-            return
-        time.sleep(1)
-
-
 def main_loop() -> None:
     setup_logging()
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-    logging.info("=" * 80)
-    logging.info("NAVER 노출/링크 모니터 데몬 시작 (전체 프록시 전수 테스트, 커서/셔플 없음)")
-    logging.info(f"주기: {CHECK_INTERVAL_SECONDS}s, MAX_PAGES: {MAX_PAGES}, headless={RUN_HEADLESS}")
-    logging.info(f"TASKS: {len(TASKS)}개")
-    logging.info("=" * 80)
-
-    proxies_cache: List[ProxyInfo] = []
-
+    logging.info("==================================================")
+    logging.info("🚀 Naver Exposure Monitor 시작")
+    logging.info(f"⚙️ 설정: 쓰레드 슬롯 {MAX_THREADS}개 / 탐색 {MAX_PAGES}페이지")
+    if ENABLE_STEALTH:
+        logging.info(f"🔒 스텔스 모드: 활성화 (딜레이: {RANDOM_DELAY_MIN}~{RANDOM_DELAY_MAX}초)")
+    logging.info("==================================================")
+    
+    proxies_cache = []
+    active_threads: List[threading.Thread] = []
+    
     try:
         while not STOP_EVENT.is_set():
-            cycle_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            logging.info(f"[CYCLE] 시작: {cycle_ts}")
-
-            # 프록시 새로고침
-            if REFRESH_PROXIES_EACH_CYCLE or not proxies_cache:
+            if REFRESH_PROXIES_EACH_CYCLE or not proxies_cache: 
                 proxies_cache = fetch_all_proxies()
-                # ✅ 순서 고정: shuffle 금지
-                # random.shuffle(proxies_cache)
-
+            
             if not proxies_cache:
-                logging.warning("[CYCLE] 프록시가 0개라 이번 사이클은 스킵")
-                sleep_interruptible(CHECK_INTERVAL_SECONDS)
-                continue
+                logging.warning("⚠️ 사용 가능한 프록시가 없습니다. 60초 후 재시도합니다.")
+                time.sleep(60); continue
 
-            # 각 task에 대해: 프록시를 성공/실패 상관없이 전부 순서대로 실행 + 전부 기록
             for task in TASKS:
-                if STOP_EVENT.is_set():
-                    break
+                for idx, proxy in enumerate(proxies_cache):
+                    if STOP_EVENT.is_set(): break
+                    
+                    # 슬롯 대기 로깅
+                    if len(active_threads) >= MAX_THREADS:
+                        logging.info(f"⏳ 슬롯 가득 찼음 ({len(active_threads)}/{MAX_THREADS}). 빈 슬롯 대기 중...")
+                    
+                    while len(active_threads) >= MAX_THREADS:
+                        active_threads = [t for t in active_threads if t.is_alive()]
+                        time.sleep(1)
+                    
+                    # 📍 현재 사용 가능한 슬롯 ID 계산 (0부터 MAX_THREADS-1까지)
+                    used_slots = set()
+                    for t in active_threads:
+                        if t.is_alive() and '-slot' in t.name:
+                            slot_part = t.name.split('-slot')[-1]
+                            try:
+                                used_slots.add(int(slot_part))
+                            except: pass
+                    
+                    # 사용 가능한 첫 번째 슬롯 찾기
+                    available_slot = None
+                    for slot_num in range(MAX_THREADS):
+                        if slot_num not in used_slots:
+                            available_slot = slot_num
+                            break
+                    
+                    if available_slot is None:
+                        available_slot = len(active_threads)  # 폴백
+                    
+                    slot_id = str(available_slot)
+                    
+                    # 새 쓰레드 생성 및 실행 (쓰레드 이름에 슬롯 ID 포함)
+                    t_name = f"{task['keyword']}-{idx}-slot{slot_id}"
+                    t = threading.Thread(target=thread_worker, args=(task, proxy, slot_id), name=t_name, daemon=True)
+                    active_threads.append(t)
+                    t.start()
+                    logging.info(f"➕ 새 쓰레드 할당: [{t_name}] | 남은 슬롯: {MAX_THREADS - len(active_threads)}")
 
-                keyword = task["keyword"]
-                target_url = task["domain"]
-                logging.info(f"[TASK] keyword='{keyword}', target_url='{target_url}' 시작 (전체 프록시 전수 테스트, 순서 고정)")
-
-                total = len(proxies_cache)
-
-                for i, proxy in enumerate(proxies_cache, start=1):
-                    if STOP_EVENT.is_set():
-                        break
-
-                    logging.info(f"[PROXY {i}/{total}] {proxy.protocol}://{proxy.address} ({proxy.source})")
-
-                    # ✅ TCP 실패도 '스킵'이 아니라 '실패로 기록'
-                    if not tcp_quick_check(proxy.address, timeout=2.0):
-                        rr = make_fail_result(task, proxy, error="TCP_CONNECT_FAIL")
-                        append_jsonl(RESULT_JSONL, asdict(rr))
-                        append_csv(RESULT_CSV, rr)
-                        continue
-
-                    # ✅ 성공/실패 상관없이 항상 실행 + 기록, 성공해도 break 금지
-                    rr = run_one_task_with_proxy(task, proxy)
-                    append_jsonl(RESULT_JSONL, asdict(rr))
-                    append_csv(RESULT_CSV, rr)
-
-                    if rr.found and rr.clicked_ok:
-                        logging.info(
-                            f"[OK] (기록만) page={rr.found_page}, rank={rr.found_rank_on_page}, final={rr.final_url}"
-                        )
-                    else:
-                        logging.info(f"[FAIL] err={rr.error}, note={rr.note}")
-
-                logging.info(f"[TASK] 완료: keyword='{keyword}', target_url='{target_url}' (총 {total}개 프록시 전수 테스트)")
-
-            logging.info(f"[CYCLE] 종료. 다음 실행까지 {CHECK_INTERVAL_SECONDS}s 대기")
-            sleep_interruptible(CHECK_INTERVAL_SECONDS)
-
+            logging.info("⏳ 모든 작업 투입 완료. 활성 쓰레드 종료 대기 중...")
+            while any(t.is_alive() for t in active_threads):
+                active_threads = [t for t in active_threads if t.is_alive()]
+                time.sleep(2)
+                
+            logging.info(f"✅ 사이클 완료. {CHECK_INTERVAL_SECONDS}초 대기 후 재시작합니다.")
+            time.sleep(CHECK_INTERVAL_SECONDS)
+            
     except KeyboardInterrupt:
-        logging.info("KeyboardInterrupt 감지 -> 종료합니다.")
         STOP_EVENT.set()
-    finally:
-        logging.info("모니터 데몬 종료 완료.")
-
-
+        logging.info("🛑 사용자 중단 신호 감지. 프로그램을 종료합니다.")
 
 if __name__ == "__main__":
     main_loop()
