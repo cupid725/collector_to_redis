@@ -207,11 +207,11 @@ except Exception as e:
 
 # ===================== 공통 설정 =====================
 TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
-TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?si=d7zi4TVY49jGdSyM" #크리스마스
-TARGET_URL = "https://youtube.com/shorts/u7sO-mNEpT4?si=-niEKY13Q38Nqq4W" #크리스마스 2
+TARGET_URL1 = "https://www.youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
+TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
 #TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
-#TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
-#TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
+TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
+TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
 
 
 COMMAND_TIMEOUT = 300
@@ -318,32 +318,22 @@ def calculate_window_position(slot_index: int, total_slots: int = NUM_BROWSERS):
 
 def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot_index: int = 0):
     """
-    향상된 스텔스 드라이버 생성
-    ✅ 슬롯 고정 방식: 디스크 I/O 부하 감소를 위해 고정된 디렉토리를 재사용
+    향상된 스텔스 드라이버 생성 (region_profiles.json의 user_agents 활용)
+    ✅ slot_index 사용: 슬롯별 고유 temp_dir 및 창 위치
+    Returns: (driver, temp_dir) 튜플
     """
     options = uc.ChromeOptions()
 
-    # ========================================================
-    # [수정] 슬롯별 고정 경로 설정 (매번 생성/삭제하지 않음)
-    # 기존 tempfile.mkdtemp() 대신 고정된 이름을 사용합니다.
-    base_temp_dir = os.path.join(tempfile.gettempdir(), "monitor_fixed_slots")
-    if not os.path.exists(base_temp_dir):
-        os.makedirs(base_temp_dir, exist_ok=True)
-        
-    temp_dir = os.path.join(base_temp_dir, f"slot_{slot_index}")
-    # 주의: 여기서 os.makedirs를 미리 하지 않아도 uc가 자동으로 생성합니다.
+    # ✅ 슬롯별 고유 temp_dir
+    temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_")
     options.add_argument(f"--user-data-dir={temp_dir}")
-    # ========================================================
     
-    # [추가] 디스크 쓰기량 자체를 줄이는 옵션 (I/O 개선 핵심)
-    options.add_argument("--disk-cache-size=52428800")    # 캐시 최대 50MB 제한
-    options.add_argument("--media-cache-size=52428800")   # 미디어 캐시 최대 50MB 제한
-    options.add_argument("--log-level=3")                 # 불필요한 로그 기록 차단
-    options.add_argument("--disable-gpu")                 # GPU 쉐이더 캐시 생성 방지
-
-    # User-Agent 설정 (기존 로직 유지)
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-    options.add_argument(f"--user-agent={ua}")
+    # ✅ User-Agent 설정 (region_profiles.json에서)
+    if "user_agents" in profile:
+        ua = random.choice(profile["user_agents"])
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+        options.add_argument(f"--user-agent={ua}")
+        print(f"[Driver-Slot{slot_index}] 🎭 User-Agent: {ua[:80]}...")
     
     options.add_argument(f"--timezone-id={profile['timezone']}")
     options.add_argument(f"--lang={profile['locale']}")
@@ -352,6 +342,7 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
         "profile.default_content_setting_values.notifications": 2,
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
+        # ✅ WebRTC 강화 차단
         "webrtc.ip_handling_policy": "disable_non_proxied_udp",
         "webrtc.multiple_routes_enabled": False,
         "webrtc.nonproxied_udp_enabled": False,
@@ -362,6 +353,9 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
     
     options.add_argument("--disable-quic")
     options.add_argument("--disable-features=NetworkService,NetworkServiceInProcess")
+
+
+    # Startup 설정
     options.add_argument("--homepage=about:blank")
     options.add_argument("about:blank")
 
@@ -370,11 +364,15 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
     
     if proxy:
         proxy_for_chrome = normalize_proxy_for_chrome(proxy)
+        if proxy_for_chrome != proxy:
+            print(f"[Proxy] 🔧 normalize: {proxy}  →  {proxy_for_chrome}")
         options.add_argument(f"--proxy-server={proxy_for_chrome}")
 
+    # ✅ 자동화 감지 우회 옵션 강화
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--no-first-run")
     
+    # ✅ 슬롯별 창 위치 계산
     pos = calculate_window_position(slot_index)
     options.add_argument(f"--window-position={pos['x']},{pos['y']}")
     options.add_argument(f"--window-size={pos['width']},{pos['height']}")
@@ -391,9 +389,20 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
             )
             driver.command_executor.set_timeout(COMMAND_TIMEOUT)
             driver.set_page_load_timeout(LOAD_TIMEOUT)
-            driver.set_window_size(pos['width'], pos['height'])
+            
+            # ✅ 창 크기를 슬롯 크기에 맞춤 (약간의 랜덤 변화)
+            driver.set_window_size(
+                pos['width'] + random.randint(-50, 50),
+                pos['height'] + random.randint(-50, 50),
+            )
+
         except Exception as e:
             print(f"[ERR] Driver creation failed (Slot-{slot_index}): {e}")
+            try:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+            except:
+                pass
             return None, None
 
     # ✅ CDP 명령으로 강력한 자동화 감지 우회
@@ -952,21 +961,21 @@ def monitor_service(
 
         time.sleep(2)
 
-        #if temp_dir and os.path.exists(temp_dir):
-        #    for attempt in range(3):
-        #        try:
-        #            shutil.rmtree(temp_dir)
-        #            print(f"[Slot-{slot_index}] 🧹 임시 디렉토리 삭제 완료: {temp_dir}")
-        #            break
-        #        except PermissionError:
-        #            if attempt < 2:
-        #                print(f"[Slot-{slot_index}] ⚠️ 삭제 재시도 {attempt + 1}/3 (파일 사용 중)")
-        #                time.sleep(2)
-        #            else:
-        #                print(f"[Slot-{slot_index}] ⚠️ 임시 디렉토리 삭제 최종 실패")
-        #        except Exception as e:
-        #            print(f"[Slot-{slot_index}] ⚠️ 임시 디렉토리 삭제 실패: {e}")
-        #            break
+        if temp_dir and os.path.exists(temp_dir):
+            for attempt in range(3):
+                try:
+                    shutil.rmtree(temp_dir)
+                    print(f"[Slot-{slot_index}] 🧹 임시 디렉토리 삭제 완료: {temp_dir}")
+                    break
+                except PermissionError:
+                    if attempt < 2:
+                        print(f"[Slot-{slot_index}] ⚠️ 삭제 재시도 {attempt + 1}/3 (파일 사용 중)")
+                        time.sleep(2)
+                    else:
+                        print(f"[Slot-{slot_index}] ⚠️ 임시 디렉토리 삭제 최종 실패")
+                except Exception as e:
+                    print(f"[Slot-{slot_index}] ⚠️ 임시 디렉토리 삭제 실패: {e}")
+                    break
 
         if redis_client and proxy_member:
             if session_ok:
