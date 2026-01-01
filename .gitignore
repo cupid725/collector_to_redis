@@ -1,8 +1,8 @@
 .venv
-.venv\
+/.venv/
 *.xlsx
 *.log
-naver_monitor_out
-__pycache__\
+/naver_monitor_out/
+/__pycache__/
 *.pyc
-_tmp_profiles\
+/_tmp_profiles/
