@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from urllib3.connection import HTTPConnection
+from pathlib import Path
 
 import requests
 import undetected_chromedriver as uc
@@ -289,7 +290,10 @@ def tcp_quick_check(addr: str, timeout: float = 2.0) -> bool:
 # 4) 브라우저 드라이버 생성 (기존 유지)
 # =============================================================================
 def make_driver(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chrome, str]:
-    profile_dir = tempfile.mkdtemp(prefix="naver_mon_profile_")
+    tmp_root = Path(__file__).resolve().parent / "_tmp_profiles"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    profile_dir = tempfile.mkdtemp(prefix=f"naver_mon_profile_", dir=str(tmp_root))
+    
     options = uc.ChromeOptions()
     options.add_argument(f"--user-data-dir={profile_dir}")
     options.add_argument("--no-first-run")
