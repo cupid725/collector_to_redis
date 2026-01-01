@@ -2,6 +2,7 @@ import random
 import threading
 import time
 import tempfile
+from pathlib import Path
 import os
 import shutil
 import json
@@ -325,7 +326,11 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
     options = uc.ChromeOptions()
 
     # ✅ 슬롯별 고유 temp_dir
-    temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_")
+    #temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_")
+    tmp_root = Path(__file__).resolve().parent / "_tmp_profiles"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+
+    temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_", dir=str(tmp_root))
     options.add_argument(f"--user-data-dir={temp_dir}")
     
     # ✅ User-Agent 설정 (region_profiles.json에서)
