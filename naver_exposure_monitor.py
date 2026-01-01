@@ -293,6 +293,93 @@ def make_driver(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chro
     tmp_root = Path(__file__).resolve().parent / "_tmp_profiles"
     tmp_root.mkdir(parents=True, exist_ok=True)
     profile_dir = tempfile.mkdtemp(prefix=f"naver_mon_profile_", dir=str(tmp_root))
+
+    driver = None
+    try:
+        options = uc.ChromeOptions()
+        options.add_argument(f"--user-data-dir={profile_dir}")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-default-browser-check")
+        options.add_argument("--disable-popup-blocking")
+        options.add_argument("--disable-notifications")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--lang=ko-KR")
+
+        if ENABLE_STEALTH:
+            options.add_argument("--disable-blink-features=AutomationControlled")
+            options.add_argument("--disable-web-security")
+            options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+            options.add_argument("--disable-infobars")
+            options.add_argument("--disable-extensions")
+            options.add_argument("--profile-directory=Default")
+            options.add_argument("--ignore-certificate-errors")
+            options.add_argument("--disable-gpu")
+            user_agent = get_random_user_agent()
+            options.add_argument(f"--user-agent={user_agent}")
+            logging.info(f"🎭 랜덤 User-Agent 적용: {user_agent[:50]}.")
+
+        if RUN_HEADLESS:
+            options.add_argument("--headless=new")
+
+        if proxy:
+            proxy_str = f"{proxy.protocol}://{proxy.address}"
+            logging.info(f"🌐 [드라이버 생성] 프록시 적용: {proxy_str} (출처: {proxy.source})")
+            options.add_argument(f"--proxy-server={proxy_str}")
+
+        driver = uc.Chrome(options=options, use_subprocess=True)
+        driver.set_page_load_timeout(PAGELOAD_TIMEOUT_SEC)
+
+        if ENABLE_STEALTH:
+            inject_stealth_scripts(driver)
+
+        saved_state = load_window_state(slot_id)
+        try:
+            if saved_state:
+                driver.set_window_size(saved_state['width'], saved_state['height'])
+                driver.set_window_position(saved_state['x'], saved_state['y'])
+            else:
+                if ENABLE_WINDOW_SIZE:
+                    w, h = WINDOW_WIDTH, WINDOW_HEIGHT
+                    if ENABLE_WINDOW_JITTER:
+                        w += random.randint(-WINDOW_JITTER_RANGE, WINDOW_JITTER_RANGE)
+                        h += random.randint(-WINDOW_JITTER_RANGE, WINDOW_JITTER_RANGE)
+                    driver.set_window_size(max(300, w), max(300, h))
+                if ENABLE_WINDOW_POSITION:
+                    driver.set_window_position(WINDOW_POS_X, WINDOW_POS_Y)
+        except Exception as e:
+            logging.warning(f"⚠️ 창 설정 적용 실패: {e}")
+
+        return driver, profile_dir
+
+    except Exception as e:
+        logging.error(f"🛑 make_driver 예외 → 프로필 정리 시도: {e}")
+
+        # 드라이버가 일부라도 떴으면 닫기
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+            time.sleep(0.2)
+
+        # 프로필 삭제(재시도)
+        for i in range(10):
+            try:
+                if profile_dir and os.path.exists(profile_dir):
+                    shutil.rmtree(profile_dir)
+                break
+            except Exception as e2:
+                logging.warning(f"⚠️ 프로필 삭제 실패(try {i+1}/10): {profile_dir} | {e2}")
+                time.sleep(0.3 * (i + 1))
+
+        raise
+
+
+def make_driver_old(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chrome, str]:
+    tmp_root = Path(__file__).resolve().parent / "_tmp_profiles"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    profile_dir = tempfile.mkdtemp(prefix=f"naver_mon_profile_", dir=str(tmp_root))
     
     options = uc.ChromeOptions()
     options.add_argument(f"--user-data-dir={profile_dir}")
@@ -323,7 +410,16 @@ def make_driver(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chro
         logging.info(f"🌐 [드라이버 생성] 프록시 적용: {proxy_str} (출처: {proxy.source})")
         options.add_argument(f"--proxy-server={proxy_str}")
 
-    driver = uc.Chrome(options=options, use_subprocess=True)
+    #driver = uc.Chrome(options=options, use_subprocess=True)
+    try:
+        driver = uc.Chrome(options=options, use_subprocess=True)
+    except Exception:
+        # 드라이버 생성 단계에서 예외가 발생하면 profile_dir이 누수되지 않도록 즉시 정리
+        try:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        except Exception:
+            pass
+    raise
     driver.set_page_load_timeout(PAGELOAD_TIMEOUT_SEC)
     
     if ENABLE_STEALTH: inject_stealth_scripts(driver)
@@ -356,6 +452,248 @@ def update_query_param(url: str, **kwargs) -> str:
 # 5) 작업 로직 (IP 노출 필터링 기능 통합)
 # =============================================================================
 def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
+    keyword, target_url = task["keyword"], task["domain"]
+    logging.info(f"▶️ 작업 시작 | 슬롯: {slot_id} | 키워드: [{keyword}] | 프록시: {proxy.address}")
+
+    driver, profile_dir = None, ""
+    rr = RunResult(
+        datetime.now().isoformat(timespec="seconds"),
+        keyword, target_url,
+        proxy.protocol, proxy.address, proxy.source,
+        False, None, None, None,
+        False, None, None, None
+    )
+
+    try:
+        # 1. TCP 체크 및 내 IP 유출 검사
+        if not tcp_quick_check(proxy.address):
+            logging.warning(f"❌ TCP 연결 실패: {proxy.address}")
+            rr.error = "TCP_CONNECT_FAIL"
+
+        elif is_proxy_leaking_my_ip(proxy, MY_PUBLIC_IP):
+            logging.warning(f"❌ 프록시 거부 (내 공인 IP 노출됨): {proxy.address}")
+            rr.error = "IP_LEAK_DETECTED"
+
+        else:
+            logging.info(f"🌐 브라우저 실행 중. (슬롯 {slot_id})")
+            driver, profile_dir = make_driver(proxy, slot_id)
+
+            random_delay(1.0, 2.0)
+            logging.info(f"🔍 네이버 접속 및 키워드 검색: [{keyword}]")
+            driver.get("https://www.naver.com/")
+            WebDriverWait(driver, ELEM_WAIT_SEC).until(
+                lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+            )
+
+            random_delay(1.5, 3.0)
+            simulate_scroll(driver, scroll_count=2)
+
+            box = WebDriverWait(driver, ELEM_WAIT_SEC).until(
+                EC.presence_of_element_located((By.NAME, "query"))
+            )
+            box.clear()
+            simulate_human_typing(box, keyword)
+            random_delay(0.5, 1.0)
+            box.send_keys(Keys.ENTER)
+
+            WebDriverWait(driver, ELEM_WAIT_SEC).until(
+                lambda d: "search.naver.com" in (d.current_url or "")
+            )
+            results_url = driver.current_url
+            random_delay(2.0, 4.0)
+
+            for page in range(1, MAX_PAGES + 1):
+                if STOP_EVENT.is_set():
+                    break
+
+                logging.info(f"📄 페이지 탐색 중. ({page}/{MAX_PAGES} page)")
+                driver.get(update_query_param(results_url, start=1 + (page - 1) * 10))
+                random_delay(2.0, 3.5)
+                simulate_scroll(driver, scroll_count=3)
+
+                found_data = None
+                anchors = driver.find_elements(By.CSS_SELECTOR, "a[href]")
+
+                # target canonical은 "가장 마지막 계산값"을 그대로 쓰지 않도록 밖에서 관리
+                t_can = urlunparse((
+                    urlparse(target_url).scheme,
+                    urlparse(target_url).netloc,
+                    urlparse(target_url).path or "/",
+                    "", "", ""
+                )) if target_url else None
+
+                for idx, a in enumerate(anchors, 1):
+                    try:
+                        href = a.get_attribute("href") or ""
+                        if href and target_url:
+                            h_can = urlunparse((
+                                urlparse(href).scheme,
+                                urlparse(href).netloc,
+                                urlparse(href).path or "/",
+                                "", "", ""
+                            ))
+
+                            if h_can.lower() == t_can.lower():
+                                # ✅ element까지 같이 저장 (실제 클릭)
+                                found_data = (idx, href, a)
+                                break
+                    except:
+                        continue
+
+                if found_data:
+                    rank, href, elem = found_data
+                    rr.found, rr.found_page, rr.found_rank_on_page, rr.found_href = True, page, rank, href
+                    random_delay(1.0, 2.5)
+
+                    # ===== (너가 요구한 클릭 로그 스니펫 그대로) =====
+                    handles_before = driver.window_handles
+                    url_before = driver.current_url
+
+                    # 클릭이 가려져서 안먹는 케이스 줄이기
+                    try:
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                            elem
+                        )
+                    except:
+                        pass
+                    random_delay(0.3, 0.8)
+
+                    elem.click()
+                    logging.info(f"[Slot-{slot_id}] ✅ elem.click() executed")
+
+                    # 클릭 결과 확인(새탭/이동 여부)
+                    time.sleep(0.2)
+                    handles_after = driver.window_handles
+                    url_after = driver.current_url
+
+                    logging.info(
+                        f"[Slot-{slot_id}] 🔎 after click | handles: {len(handles_before)}→{len(handles_after)} | url: {url_before} → {url_after}"
+                    )
+                    # ==============================================
+
+                    # 새 탭이면 전환했다가, 작업 끝나면 닫고 부모로 복귀
+                    parent_handle = driver.current_window_handle
+                    child_handle = None
+                    try:
+                        new_handles = [h for h in handles_after if h not in handles_before]
+                        if new_handles:
+                            child_handle = new_handles[-1]
+                            driver.switch_to.window(child_handle)
+                    except:
+                        child_handle = None
+
+                    # 클릭 후 실제 로딩 대기
+                    try:
+                        WebDriverWait(driver, 10).until(
+                            lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                        )
+                    except:
+                        pass
+
+                    random_delay(2.0, 3.0)
+
+                    final_url = driver.current_url
+                    h_final = urlunparse((
+                        urlparse(final_url).scheme,
+                        urlparse(final_url).netloc,
+                        urlparse(final_url).path or "/",
+                        "", "", ""
+                    ))
+
+                    if t_can and h_final.lower() == t_can.lower():
+                        rr.clicked_ok, rr.final_url = True, final_url
+                    else:
+                        rr.clicked_ok, rr.final_url, rr.note = False, final_url, "FINAL_URL_NOT_MATCH"
+
+                    # 자식 탭은 닫고 부모로 복귀
+                    if child_handle:
+                        try:
+                            driver.close()
+                        except:
+                            pass
+                        try:
+                            driver.switch_to.window(parent_handle)
+                        except:
+                            pass
+
+                    break
+
+                if page < MAX_PAGES:
+                    random_delay(1.5, 3.0)
+
+            if not rr.found and not rr.error:
+                rr.error = "NOT_FOUND_IN_PAGES"
+
+    except Exception as e:
+        logging.error(f"💥 예외 발생: {str(e)[:100]}")
+        rr.error = str(e)[:160]
+
+    finally:
+        # 창 상태 저장 + 드라이버 종료
+        if driver:
+            try:
+                pos = driver.get_window_position()
+                size = driver.get_window_size()
+                save_window_state(slot_id, pos['x'], pos['y'], size['width'], size['height'])
+            except:
+                pass
+
+            try:
+                driver.quit()
+            except:
+                pass
+
+            # quit 직후 파일락 완화
+            time.sleep(0.3)
+
+        # ✅ 프로필 디렉 삭제: ignore_errors 제거 + 재시도 + 실패 로그
+        if profile_dir:
+            def _onerror(func, path, exc_info):
+                try:
+                    os.chmod(path, 0o777)
+                    func(path)
+                except:
+                    pass
+
+            deleted = False
+            for i in range(10):
+                try:
+                    if os.path.exists(profile_dir):
+                        shutil.rmtree(profile_dir, onerror=_onerror)
+                    if not os.path.exists(profile_dir):
+                        deleted = True
+                        break
+                except Exception as e2:
+                    logging.warning(f"⚠️ 프로필 삭제 실패(try {i+1}/10): {profile_dir} | {e2}")
+                time.sleep(0.3 * (i + 1))
+
+            if not deleted and os.path.exists(profile_dir):
+                logging.error(f"🛑 프로필 디렉 최종 삭제 실패: {profile_dir}")
+
+        # 결과 저장(원본 그대로)
+        with FILE_LOCK:
+            with open(RESULT_JSONL, "a", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(rr), ensure_ascii=False) + "\n")
+            is_new = not os.path.exists(RESULT_CSV)
+            with open(RESULT_CSV, "a", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                if is_new:
+                    w.writerow([
+                        "ts", "keyword", "target_url", "proxy_protocol", "proxy_address", "proxy_source",
+                        "found", "found_page", "found_rank_on_page", "found_href",
+                        "clicked_ok", "final_url", "error", "note"
+                    ])
+                w.writerow([
+                    rr.ts, rr.keyword, rr.target_url, rr.proxy_protocol, rr.proxy_address, rr.proxy_source,
+                    rr.found, rr.found_page, rr.found_rank_on_page, rr.found_href,
+                    rr.clicked_ok, rr.final_url, rr.error, rr.note
+                ])
+
+        logging.info(f"🏁 작업 종료 | 슬롯: {slot_id} | 결과: {'성공' if rr.found else '실패'}")
+
+
+def thread_worker_old(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
     keyword, target_url = task["keyword"], task["domain"]
     logging.info(f"▶️ 작업 시작 | 슬롯: {slot_id} | 키워드: [{keyword}] | 프록시: {proxy.address}")
     
@@ -460,6 +798,8 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
 # =============================================================================
 # 6) 메인 루프
 # =============================================================================
+
+
 def main_loop() -> None:
     global MY_PUBLIC_IP
     setup_logging()
