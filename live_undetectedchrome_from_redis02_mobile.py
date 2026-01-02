@@ -211,8 +211,8 @@ TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
 TARGET_URL1 = "https://www.youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
 TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
 #TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
-TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
-TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
+TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
+TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
 #TARGET_URL = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
 #TARGET_URL1 = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
 
@@ -1007,7 +1007,7 @@ def monitor_service(
 
             #driver.get(url)
             try:
-                get_and_error_if_new_tab(driver, url, max_wait=2.0, close_new=True)
+                get_and_error_if_new_tab(driver, url, max_wait=5.0, close_new=True)
             except RuntimeError as e:
                 print(f"[Slot-{slot_index}] ⚠️[ERR] 새 탭/창 자동 오픈 감지:{e}")
                 return
