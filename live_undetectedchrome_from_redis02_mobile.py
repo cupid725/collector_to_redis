@@ -208,11 +208,13 @@ except Exception as e:
 
 # ===================== 공통 설정 =====================
 TARGET_URL = "https://www.youtube.com/shorts/mcy0JKTavW4?feature=share" #첫눈
-TARGET_URL1 = "https://www.youtube.com/shorts/-vVnZoVtnFk?feature=share" #크리스마스
-TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
-#TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
+
+TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?si=d7zi4TVY49jGdSyM" #크리스마스
+TARGET_URL = "https://youtube.com/shorts/u7sO-mNEpT4?si=-niEKY13Q38Nqq4W" #크리스마스 2
+
 TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
 TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
+
 #TARGET_URL = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
 #TARGET_URL1 = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
 
