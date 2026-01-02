@@ -7,7 +7,7 @@ import os
 import shutil
 import json
 from typing import Dict, Any, Optional
-from live_human_events import HumanEvent
+from live_human_events import HumanEvent, HumanEventMobile
 
 # 외부 라이브러리
 import numpy as np  # pip install numpy
@@ -213,8 +213,8 @@ TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리�
 #TARGET_URL1 = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share" #크리스마스 2
 TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
 TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
-TARGET_URL = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
-TARGET_URL1 = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
+#TARGET_URL = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
+#TARGET_URL1 = "https://www.youtube.com/shorts/i2Z4NaSqCYc?feature=share" #테스트용
 
 
 COMMAND_TIMEOUT = 300
@@ -295,8 +295,10 @@ def normalize_proxy_for_chrome(proxy: Optional[str]) -> Optional[str]:
     return p
 
 # ✅ 슬롯별 창 위치 계산 함수 (Playwright 버전과 동일)
-def calculate_window_position(slot_index: int, total_slots: int = NUM_BROWSERS):
-    """슬롯별 창 위치 계산"""
+def calculate_window_position(slot_index: int, width: int, height: int, total_slots: int = NUM_BROWSERS):
+    """
+    각 슬롯의 실제 크기를 고려한 창 위치 계산
+    """
     if total_slots <= 3:
         cols, rows = total_slots, 1
     elif total_slots <= 4:
@@ -307,40 +309,125 @@ def calculate_window_position(slot_index: int, total_slots: int = NUM_BROWSERS):
         cols = 3
         rows = (total_slots + 2) // 3
     
-    window_width = SCREEN_WIDTH // cols
-    window_height = SCREEN_HEIGHT // rows
+    # ✅ 최대 크기 기준으로 그리드 계산 (여유 공간 확보)
+    max_width = 450  # 모바일 최대 너비 + 여유
+    max_height = 950  # 모바일 최대 높이 + 여유
+    
     row = slot_index // cols
     col = slot_index % cols
     
     return {
-        'x': col * window_width,
-        'y': row * window_height,
-        'width': window_width,
-        'height': window_height
+        'x': col * max_width,
+        'y': row * max_height,
+        'width': width,   # 실제 디바이스 크기
+        'height': height
     }
+# ===================== 모바일 디바이스 정보 로드 =====================
+from playwright.sync_api import sync_playwright
+def load_mobile_devices():
+    """Playwright의 디바이스 목록을 가져와서 모바일 기기만 필터링"""
+    with sync_playwright() as p:
+        devices = p.devices
+        # 모바일 디바이스만 필터링 (iPhone, iPad, Pixel, Galaxy 등)
+        mobile_devices = {
+            name: info for name, info in devices.items()
+            if any(keyword in name for keyword in ['iPhone', 'iPad', 'Pixel', 'Galaxy', 'Nexus'])
+        }
+    return mobile_devices
 
+# 전역 변수로 로드
+try:
+    MOBILE_DEVICES = load_mobile_devices()
+    print(f"[INIT] 모바일 디바이스 로드 완료. 디바이스 수: {len(MOBILE_DEVICES)}")
+except Exception as e:
+    print(f"[INIT] ⚠️ 모바일 디바이스 로드 실패: {e}")
+    MOBILE_DEVICES = {}
+    
 def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot_index: int = 0):
     """
-    향상된 스텔스 드라이버 생성 (region_profiles.json의 user_agents 활용)
+    향상된 스텔스 드라이버 생성 (모바일 기기 에뮬레이션)
     ✅ slot_index 사용: 슬롯별 고유 temp_dir 및 창 위치
+    ✅ Playwright 디바이스 정보로 실제 모바일 기기 에뮬레이션
     Returns: (driver, temp_dir) 튜플
     """
     options = uc.ChromeOptions()
 
     # ✅ 슬롯별 고유 temp_dir
-    #temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_")
     tmp_root = Path(__file__).resolve().parent / "_tmp_profiles"
     tmp_root.mkdir(parents=True, exist_ok=True)
-
     temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_", dir=str(tmp_root))
     options.add_argument(f"--user-data-dir={temp_dir}")
     
-    # ✅ User-Agent 설정 (region_profiles.json에서)
-    if "user_agents" in profile:
-        ua = random.choice(profile["user_agents"])
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
+    # ✅ 랜덤 모바일 디바이스 선택
+    mobile_width = 412  # 기본값
+    mobile_height = 915
+    device_scale_factor = 3.0
+    is_mobile = True
+    
+    if MOBILE_DEVICES:
+        device_name = random.choice(list(MOBILE_DEVICES.keys()))
+        device = MOBILE_DEVICES[device_name]
+        
+        # User-Agent (모바일)
+        ua = device['user_agent']
         options.add_argument(f"--user-agent={ua}")
+        
+        # 디바이스의 실제 화면 크기
+        viewport = device['viewport']
+        mobile_width = viewport['width']
+        mobile_height = viewport['height']
+        device_scale_factor = device.get('device_scale_factor', 3.0)
+        is_mobile = device.get('is_mobile', True)
+        
+        print(f"[Driver-Slot{slot_index}] 📱 Mobile Device: {device_name}")
         print(f"[Driver-Slot{slot_index}] 🎭 User-Agent: {ua[:80]}...")
+        print(f"[Driver-Slot{slot_index}] 📐 Screen Size: {mobile_width}x{mobile_height}")
+        
+    else:
+        # fallback: 다양한 모바일 크기 중 랜덤 선택
+        print(f"[Driver-Slot{slot_index}] ⚠️ MOBILE_DEVICES 없음, fallback 모바일 설정 사용")
+        
+        common_mobile_configs = [
+            {
+                'size': (360, 640),
+                'ua': 'Mozilla/5.0 (Linux; Android 11; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+                'scale': 3.0
+            },
+            {
+                'size': (375, 667),
+                'ua': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+                'scale': 2.0
+            },
+            {
+                'size': (390, 844),
+                'ua': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+                'scale': 3.0
+            },
+            {
+                'size': (412, 915),
+                'ua': 'Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+                'scale': 2.625
+            },
+            {
+                'size': (414, 896),
+                'ua': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Mobile/15E148 Safari/604.1',
+                'scale': 3.0
+            },
+            {
+                'size': (393, 873),
+                'ua': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+                'scale': 2.75
+            },
+        ]
+        
+        config = random.choice(common_mobile_configs)
+        mobile_width, mobile_height = config['size']
+        device_scale_factor = config['scale']
+        ua = config['ua']
+        options.add_argument(f"--user-agent={ua}")
+        
+        print(f"[Driver-Slot{slot_index}] 📐 Fallback Size: {mobile_width}x{mobile_height}")
+        print(f"[Driver-Slot{slot_index}] 🎭 Fallback UA: {ua[:80]}...")
     
     options.add_argument(f"--timezone-id={profile['timezone']}")
     options.add_argument(f"--lang={profile['locale']}")
@@ -361,31 +448,32 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
     options.add_argument("--disable-quic")
     options.add_argument("--disable-features=NetworkService,NetworkServiceInProcess")
 
-
     # Startup 설정
     options.add_argument("--homepage=about:blank")
     options.add_argument("about:blank")
 
     if HEADLESS:
         options.add_argument("--headless=new")
-    
+    #proxy = None
     if proxy:
-        proxy_for_chrome = normalize_proxy_for_chrome(proxy)
-        if proxy_for_chrome != proxy:
-            print(f"[Proxy] 🔧 normalize: {proxy}  →  {proxy_for_chrome}")
-        options.add_argument(f"--proxy-server={proxy_for_chrome}")
+        options.add_argument(f"--proxy-server={proxy}")
+        #proxy_for_chrome = normalize_proxy_for_chrome(proxy)
+        #if proxy_for_chrome != proxy:
+        #    print(f"[Proxy] 🔧 normalize: {proxy}  →  {proxy_for_chrome}")
+        #options.add_argument(f"--proxy-server={proxy_for_chrome}")
 
     # ✅ 자동화 감지 우회 옵션 강화
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--no-first-run")
     
-    # ✅ 슬롯별 창 위치 계산
-    pos = calculate_window_position(slot_index)
+    # ✅ 모바일 화면 크기를 고려한 창 위치 계산
+    pos = calculate_window_position(slot_index, mobile_width, mobile_height)
     options.add_argument(f"--window-position={pos['x']},{pos['y']}")
-    options.add_argument(f"--window-size={pos['width']},{pos['height']}")
+    options.add_argument(f"--window-size={mobile_width},{mobile_height}")
     
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
+
 
     with driver_creation_lock:
         try:
@@ -397,10 +485,10 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
             driver.command_executor.set_timeout(COMMAND_TIMEOUT)
             driver.set_page_load_timeout(LOAD_TIMEOUT)
             
-            # ✅ 창 크기를 슬롯 크기에 맞춤 (약간의 랜덤 변화)
+            # ✅ 모바일 화면 크기 설정 (약간의 랜덤 변화)
             driver.set_window_size(
-                pos['width'] + random.randint(-50, 50),
-                pos['height'] + random.randint(-50, 50),
+                mobile_width + random.randint(-5, 5),
+                mobile_height + random.randint(-10, 10),
             )
 
         except Exception as e:
@@ -411,6 +499,30 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
             except:
                 pass
             return None, None
+
+    # ✅ CDP 명령으로 모바일 에뮬레이션 활성화
+    try:
+        driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+            "width": mobile_width,
+            "height": mobile_height,
+            "deviceScaleFactor": device_scale_factor,
+            "mobile": is_mobile,
+            "screenOrientation": {
+                "type": "portraitPrimary",
+                "angle": 0
+            }
+        })
+        
+        # 터치 이벤트 활성화
+        driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled", {
+            "enabled": True,
+            "maxTouchPoints": 5
+        })
+        
+        print(f"[Driver-Slot{slot_index}] ✅ 모바일 에뮬레이션 활성화 완료")
+        
+    except Exception as e:
+        print(f"[Driver-Slot{slot_index}] ⚠️ 모바일 에뮬레이션 설정 실패: {e}")
 
     # ✅ CDP 명령으로 강력한 자동화 감지 우회
     try:
@@ -429,6 +541,25 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
                     
                     Object.defineProperty(navigator, 'languages', { 
                         get: () => ['ko-KR', 'ko', 'en-US', 'en'] 
+                    });
+                    
+                    // ✅ 모바일 기기 특성 추가
+                    Object.defineProperty(navigator, 'maxTouchPoints', {
+                        get: () => 5
+                    });
+                    
+                    Object.defineProperty(navigator, 'platform', {
+                        get: () => {
+                            const platforms = ['Linux armv8l', 'Linux armv7l', 'iPhone'];
+                            return platforms[Math.floor(Math.random() * platforms.length)];
+                        }
+                    });
+                    
+                    Object.defineProperty(navigator, 'hardwareConcurrency', {
+                        get: () => {
+                            const cores = [4, 6, 8];
+                            return cores[Math.floor(Math.random() * cores.length)];
+                        }
                     });
                     
                     // Chrome 객체 추가 (자동화 도구 아님을 위장)
@@ -451,14 +582,14 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
                     const getParameter = WebGLRenderingContext.prototype.getParameter;
                     WebGLRenderingContext.prototype.getParameter = function(parameter) {
                         if (parameter === 37445) {
-                            const vendors = ['Intel Inc.', 'Google Inc.', 'Mozilla'];
+                            const vendors = ['Google Inc.', 'ARM', 'Qualcomm'];
                             return vendors[Math.floor(Math.random() * vendors.length)];
                         }
                         if (parameter === 37446) {
                             const renderers = [
-                                'Intel Iris OpenGL Engine',
-                                'ANGLE (Intel, Intel(R) HD Graphics 630 Direct3D11 vs_5_0 ps_5_0)',
-                                'Mesa DRI Intel(R) HD Graphics'
+                                'Adreno (TM) 640',
+                                'Mali-G78',
+                                'Apple A15 GPU'
                             ];
                             return renderers[Math.floor(Math.random() * renderers.length)];
                         }
@@ -483,6 +614,12 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
                     
                     // console.debug 숨기기
                     console.debug = () => {};
+                    
+                    // ✅ 터치 이벤트 지원 추가
+                    if (!('ontouchstart' in window)) {
+                        window.ontouchstart = null;
+                        document.ontouchstart = null;
+                    }
                 """
             },
         )
@@ -493,18 +630,20 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
 
     # ✅ 네트워크 조건 시뮬레이션 (사람처럼 보이게)
     try:
+        # 모바일 네트워크는 데스크톱보다 느림
         #driver.execute_cdp_cmd('Network.enable', {})
         #driver.execute_cdp_cmd('Network.emulateNetworkConditions', {
         #    'offline': False,
-        #    'downloadThroughput': random.uniform(1.0, 2.5) * 1024 * 1024,  # 1-2.5 Mbps
-        #    'uploadThroughput': random.uniform(500, 1000) * 1024,  # 500-1000 Kbps
-        #    'latency': random.randint(20, 150),  # 20-150ms
+        #    'downloadThroughput': random.uniform(0.5, 1.5) * 1024 * 1024,  # 0.5-1.5 Mbps (모바일 4G)
+        #    'uploadThroughput': random.uniform(200, 500) * 1024,  # 200-500 Kbps
+        #    'latency': random.randint(50, 200),  # 50-200ms (모바일 레이턴시)
         #})
-        print(f"[Driver-Slot{slot_index}] 🌐 네트워크 조건 시뮬레이션 활성화")
+        print(f"[Driver-Slot{slot_index}] 🌐 모바일 네트워크 조건 시뮬레이션 활성화")
     except Exception as e:
         print(f"[Driver-Slot{slot_index}] ⚠️ 네트워크 시뮬레이션 실패: {e}")
 
     return driver, temp_dir
+
 
 
 # ===================== 프록시 품질 테스트 함수 (선택적 사용) =====================
@@ -921,7 +1060,7 @@ def monitor_service(
         # ✅ 휴먼 이벤트 타이밍 계산: 세션 종료 HUMAN_EVENT_BEFORE_END_SECONDS초 전
         human_event_timing = min(HUMAN_EVENT_BEFORE_END_SECONDS, stay_time - HUMAN_EVENT_BEFORE_END_SECONDS)
         
-        human_event = HumanEvent(driver)
+        human_event = HumanEventMobile(driver)
 
         if human_event_timing <= 5:
             # 체류 시간이 너무 짧으면 즉시 실행
