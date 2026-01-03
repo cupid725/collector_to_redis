@@ -297,6 +297,7 @@ def make_driver(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chro
     driver = None
     try:
         options = uc.ChromeOptions()
+        
         options.add_argument(f"--user-data-dir={profile_dir}")
         options.add_argument("--no-first-run")
         options.add_argument("--no-default-browser-check")
@@ -305,7 +306,8 @@ def make_driver(proxy: Optional[ProxyInfo], slot_id: str = "0") -> Tuple[uc.Chro
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--no-sandbox")
         options.add_argument("--lang=ko-KR")
-
+        options.set_capability("pageLoadStrategy", "eager")   # ✅ 핵심
+        
         if ENABLE_STEALTH:
             options.add_argument("--disable-blink-features=AutomationControlled")
             options.add_argument("--disable-web-security")
@@ -448,6 +450,69 @@ def update_query_param(url: str, **kwargs) -> str:
     for k, v in kwargs.items(): q[str(k)] = [str(v)]
     return urlunparse((u.scheme, u.netloc, u.path, u.params, urlencode(q, doseq=True), u.fragment))
 
+def simulate_natural_scroll(driver, min_actions: int = 6, max_actions: int = 12) -> None:
+    """
+    자연스러운 읽기 행동처럼:
+    - 아래로 여러 번 스크롤
+    - 잠깐 멈춰서 읽는 듯 대기
+    - 위로 조금 되돌아가는 스크롤
+    """
+    if not ENABLE_STEALTH or not SCROLL_BEHAVIOR:
+        return
+
+    try:
+        scroll_h = driver.execute_script(
+            "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) || 0;"
+        )
+        view_h = driver.execute_script("return window.innerHeight || 0;")
+        if not scroll_h or not view_h:
+            return
+        if scroll_h <= view_h + 80:
+            return  # 스크롤할 게 거의 없음
+    except Exception:
+        return
+
+    actions = random.randint(min_actions, max_actions)
+    down_actions = max(2, int(actions * random.uniform(0.6, 0.8)))
+    up_actions = max(1, actions - down_actions)
+
+    # 아래로 스크롤 (부드럽게)
+    for _ in range(down_actions):
+        step = random.randint(int(view_h * 0.25), int(view_h * 0.95))
+        try:
+            driver.execute_script(
+                "window.scrollBy({top: arguments[0], left: 0, behavior: 'smooth'});",
+                step,
+            )
+        except Exception:
+            driver.execute_script("window.scrollBy(0, arguments[0]);", step)
+        time.sleep(random.uniform(0.4, 1.2))
+
+        # 중간중간 '읽는' 멈춤
+        if random.random() < 0.25:
+            time.sleep(random.uniform(0.7, 1.8))
+
+    # 잠깐 머무름
+    time.sleep(random.uniform(1.0, 2.5))
+
+    # 위로 조금 되돌리기
+    for _ in range(up_actions):
+        step = random.randint(int(view_h * 0.15), int(view_h * 0.75))
+        try:
+            driver.execute_script(
+                "window.scrollBy({top: -arguments[0], left: 0, behavior: 'smooth'});",
+                step,
+            )
+        except Exception:
+            driver.execute_script("window.scrollBy(0, -arguments[0]);", step)
+        time.sleep(random.uniform(0.35, 1.0))
+
+    # 마지막에 아주 미세한 흔들림(가끔)
+    if random.random() < 0.5:
+        jiggle = random.randint(-120, 120)
+        driver.execute_script("window.scrollBy(0, arguments[0]);", jiggle)
+        time.sleep(random.uniform(0.2, 0.6))
+
 # =============================================================================
 # 5) 작업 로직 (IP 노출 필터링 기능 통합)
 # =============================================================================
@@ -481,8 +546,11 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
             random_delay(1.0, 2.0)
             logging.info(f"🔍 네이버 접속 및 키워드 검색: [{keyword}]")
             driver.get("https://www.naver.com/")
+            #WebDriverWait(driver, ELEM_WAIT_SEC).until(
+            #    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+            #)
             WebDriverWait(driver, ELEM_WAIT_SEC).until(
-                lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                lambda d: d.execute_script("return document.readyState") != "loading"
             )
 
             random_delay(1.5, 3.0)
@@ -585,13 +653,18 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
 
                     # 클릭 후 실제 로딩 대기
                     try:
+                        #WebDriverWait(driver, 10).until(
+                        #    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
+                        #)
                         WebDriverWait(driver, 10).until(
-                            lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
-                        )
+                            lambda d: d.execute_script("return document.readyState") != "loading"
+                        )    
                     except:
                         pass
-
-                    random_delay(2.0, 3.0)
+                    # ✅ 로딩 끝나면 자연스러운 스크롤 다운/업
+                    random_delay(30.0, 60.0)
+                    simulate_natural_scroll(driver)
+                    random_delay(300.0, 360.0)
 
                     final_url = driver.current_url
                     h_final = urlunparse((

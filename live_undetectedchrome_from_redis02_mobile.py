@@ -8,7 +8,7 @@ import shutil
 import json
 from typing import Dict, Any, Optional
 from live_human_events import HumanEvent, HumanEventMobile
-
+import re
 # 외부 라이브러리
 import numpy as np  # pip install numpy
 import redis        # pip install redis
@@ -724,12 +724,210 @@ def ensure_page_ready(driver, timeout=120):
 # ===================== 유튜브 동의 페이지 처리 =====================
 from urllib.parse import urlparse
 
-def click_youtube_consent_accept_all(driver, timeout=8):
+
+def click_youtube_consent_accept_all_deprecated(
+    driver,
+    slot_index: int,
+    timeout: float = 4.0,
+    redirect_timeout: float = 6.0,
+    post_click_sleep: float = 0.25
+) -> bool:
+    """
+    YouTube consent 페이지에서 'Accept all' 처리.
+    안전장치:
+      - consent 도메인이 아니면 즉시 return (재생페이지 건드리지 않음)
+      - 클릭 후 /save 중간단계 리다이렉트 기다림
+    """
+
+    prefix = f"[Slot-{slot_index}]"
+
+    def _p(msg: str):
+        print(f"{prefix} {msg}")
+
+    def _s(x, n=220):
+        if x is None:
+            return ""
+        x = re.sub(r"\s+", " ", str(x)).strip()
+        return x[:n] + ("..." if len(x) > n else "")
+
+    def _safe(fn, default=""):
+        try:
+            return fn()
+        except Exception:
+            return default
+
+    def _dump_state(tag: str):
+        _p(f"[{tag}] url={_safe(lambda: driver.current_url, '<no url>')}")
+        _p(f"[{tag}] title={_s(_safe(lambda: driver.title, '<no title>'))}")
+        _p(f"[{tag}] readyState={_safe(lambda: driver.execute_script('return document.readyState'), '<no rs>')}")
+
+    # 0) 가장 중요: consent 페이지가 아니면 절대 건드리지 않음
+    url = _safe(lambda: driver.current_url, "")
+    if "consent.youtube.com" not in (url or ""):
+        _p(f"[CONSENT] skip (not consent domain): {url}")
+        return False
+
+    _p("=" * 90)
+    _p("[CONSENT] START")
+    _dump_state("TOP")
+
+    # 1) consent DOM이 실제로 뜰 때까지 짧게 대기
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            forms_cnt = len(driver.find_elements(By.CSS_SELECTOR, "form[action*='consent.youtube.com/save']"))
+            btn_cnt = len(driver.find_elements(By.CSS_SELECTOR, "button[jsname='b3VHJd'], button[jsname='tWT92d']"))
+            if forms_cnt > 0 or btn_cnt > 0:
+                break
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+    # 2) 요소 스캔 + accept 폼 분류
+    forms = driver.find_elements(By.CSS_SELECTOR, "form[action*='consent.youtube.com/save']")
+    btn_accept = driver.find_elements(By.CSS_SELECTOR, "button[jsname='b3VHJd']")
+    btn_reject = driver.find_elements(By.CSS_SELECTOR, "button[jsname='tWT92d']")
+    btn_more   = driver.find_elements(By.CSS_SELECTOR, "button[jsname='dwvGkc']")
+
+    _p(f"[SCAN] forms(save)={len(forms)} accept_btn(b3VHJd)={len(btn_accept)} "
+       f"reject_btn(tWT92d)={len(btn_reject)} more_btn(dwvGkc)={len(btn_more)}")
+
+    accept_forms = []
+    for idx, f in enumerate(forms):
+        try:
+            has_ytc = len(f.find_elements(By.CSS_SELECTOR, "input[name='set_ytc'][value='true']")) > 0
+            has_apyt = len(f.find_elements(By.CSS_SELECTOR, "input[name='set_apyt'][value='true']")) > 0
+            has_eom_true = len(f.find_elements(By.CSS_SELECTOR, "input[name='set_eom'][value='true']")) > 0
+            has_eom_false = len(f.find_elements(By.CSS_SELECTOR, "input[name='set_eom'][value='false']")) > 0
+            _p(f"[FORM#{idx}] set_ytc={has_ytc} set_apyt={has_apyt} set_eom_true={has_eom_true} set_eom_false={has_eom_false}")
+            if has_ytc and has_apyt and has_eom_false:
+                accept_forms.append(f)
+        except Exception as e:
+            _p(f"[FORM#{idx}] ❌ classify error: {type(e).__name__}: {e}")
+
+    _p(f"[CLASSIFY] accept_forms={len(accept_forms)}")
+
+    def _extract_continue_url(form):
+        try:
+            v = form.find_element(By.CSS_SELECTOR, "input[name='continue']").get_attribute("value") or ""
+            if "%3A" in v or "%2F" in v:
+                try:
+                    v2 = unquote(v)
+                    if v2:
+                        v = v2
+                except Exception:
+                    pass
+            return v
+        except Exception:
+            return ""
+
+    def _click_js(elem, label: str) -> bool:
+        try:
+            disp = _safe(lambda: elem.is_displayed(), False)
+            en = _safe(lambda: elem.is_enabled(), False)
+            aria = _safe(lambda: elem.get_attribute("aria-label"), "")
+            txt = _safe(lambda: elem.text, "")
+            _p(f"[{label}] displayed={disp} enabled={en} aria={_s(aria)} text={_s(txt)}")
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elem)
+            except Exception:
+                pass
+            driver.execute_script("arguments[0].click();", elem)
+            _p(f"[{label}] ✅ JS click success")
+            return True
+        except Exception as e:
+            _p(f"[{label}] ❌ click failed: {type(e).__name__}: {e}")
+            return False
+
+    before_url = _safe(lambda: driver.current_url, "")
+
+    # 3) 클릭 시도: 보이는 accept 폼 우선 -> 그 다음 accept 버튼
+    clicked = False
+    picked_continue = ""
+
+    scored = []
+    for f in accept_forms:
+        try:
+            b = f.find_element(By.CSS_SELECTOR, "button")
+            vis = _safe(lambda: b.is_displayed(), False)
+            scored.append((1 if vis else 0, f, b))
+        except Exception:
+            scored.append((0, f, None))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    for i, (vis_score, f, b) in enumerate(scored[:3]):
+        picked_continue = _extract_continue_url(f)
+        _p(f"[ACCEPT_FORM#{i}] visible={bool(vis_score)} continue={_s(picked_continue, 260)}")
+        if b is None:
+            continue
+        if _click_js(b, f"ACCEPT_FORM#{i}"):
+            clicked = True
+            break
+
+    if not clicked:
+        for i, b in enumerate(btn_accept[:5]):
+            if _click_js(b, f"ACCEPT_BTN#{i}"):
+                clicked = True
+                break
+
+    if not clicked:
+        _p("[CONSENT] ❌ FAIL: could not click accept-all")
+        _dump_state("END_FAIL")
+        _p("=" * 90)
+        return False
+
+    time.sleep(post_click_sleep)
+    after_click_url = _safe(lambda: driver.current_url, "")
+    _p(f"[CLICK] url before={before_url} after_click={after_click_url}")
+
+    # 4) 클릭 후 리다이렉트 대기 (/save는 중간단계)
+    t1 = time.time()
+    last = after_click_url
+    while time.time() - t1 < redirect_timeout:
+        time.sleep(0.2)
+        cur = _safe(lambda: driver.current_url, "")
+        if cur != last:
+            _p(f"[REDIRECT] url changed: {last} -> {cur}")
+            last = cur
+
+        if "consent.youtube.com" not in (cur or "") and "youtube.com" in (cur or ""):
+            _p(f"[REDIRECT] ✅ back to youtube: {cur}")
+            _dump_state("END_OK")
+            _p("=" * 90)
+            return True
+
+        if picked_continue and cur.startswith(picked_continue):
+            _p(f"[REDIRECT] ✅ landed on continue: {cur}")
+            _dump_state("END_OK")
+            _p("=" * 90)
+            return True
+
+    # 5) redirect가 안되면 consent 도메인 안에서만 continue 강제 이동
+    cur = _safe(lambda: driver.current_url, "")
+    _p(f"[REDIRECT] ⏰ timeout. current_url={cur}")
+
+    if "consent.youtube.com" in (cur or "") and picked_continue:
+        _p(f"[FORCE] driver.get(continue) -> {_s(picked_continue, 260)}")
+        try:
+            driver.get(picked_continue)
+            _dump_state("END_FORCE")
+            _p("=" * 90)
+            return True
+        except Exception as e:
+            _p(f"[FORCE] ❌ driver.get failed: {type(e).__name__}: {e}")
+
+    _dump_state("END_UNCERTAIN")
+    _p("[CONSENT] RESULT=True (clicked, but redirect uncertain)")
+    _p("=" * 90)
+    return True
+
+
+def click_youtube_consent_accept_all(driver,slot_index: int, timeout=8):
     try:
         url = driver.current_url
         host = urlparse(url).hostname or ""
         if "consent.youtube.com" not in host:
-            print(f"[Consent]  동의 페이지가 아닌 것으로 판단 → 스킵({host})")
+            print(f"[Slot-{slot_index}][Consent]  동의 페이지가 아닌 것으로 판단 → 스킵({host})")
             return False
 
         forms = driver.find_elements(
@@ -737,7 +935,7 @@ def click_youtube_consent_accept_all(driver, timeout=8):
             "form[action='https://consent.youtube.com/save']",
         )
         if not forms:
-            print("[Consent] save 폼이 없어 동의 페이지가 아닌 것으로 판단 → 스킵")
+            print("[Slot-{slot_index}][Consent] save 폼이 없어 동의 페이지가 아닌 것으로 판단 → 스킵")
             return False
 
         btn = WebDriverWait(driver, timeout).until(
@@ -749,14 +947,14 @@ def click_youtube_consent_accept_all(driver, timeout=8):
             )
         )
         btn.click()
-        print("[Consent] ✅ 유튜브 동의 '모두 수락' 버튼 자동 클릭 완료")
+        print("[Slot-{slot_index}][Consent] ✅ 유튜브 동의 '모두 수락' 버튼 자동 클릭 완료")
         return True
 
     except (TimeoutException, NoSuchElementException):
-        print("[Consent] ⚠ 동의 버튼을 찾지 못함 (구조 변경/언어 이슈?)")
+        print("[Slot-{slot_index}][Consent] ⚠ 동의 버튼을 찾지 못함 (구조 변경/언어 이슈?)")
         return False
     except Exception as e:
-        print(f"[Consent] ⚠ 예외 발생: {e}")
+        print(f"[Slot-{slot_index}][Consent] ⚠ 예외 발생: {e}")
         return False
 
 def is_driver_alive(driver) -> bool:
@@ -1014,14 +1212,14 @@ def monitor_service(
                 print(f"[Slot-{slot_index}] ⚠️[ERR] 새 탭/창 자동 오픈 감지:{e}")
                 return
 
-            clicked = click_youtube_consent_accept_all(driver)
+            clicked = click_youtube_consent_accept_all(driver,slot_index)
 
             if not clicked:
                 try:
                     WebDriverWait(driver, 5).until(
                         lambda d: "consent.youtube.com" in d.current_url
                     )
-                    click_youtube_consent_accept_all(driver)
+                    click_youtube_consent_accept_all(driver,slot_index)
                 except TimeoutException:
                     pass
         except TimeoutException:
