@@ -31,7 +31,7 @@ from selenium.webdriver.support import expected_conditions as EC
 # =============================================================================
 # 0) 사용자 설정
 # =============================================================================
-MAX_THREADS = 1  
+MAX_THREADS = 2  
 
 ENABLE_WINDOW_SIZE = True
 WINDOW_WIDTH = 600

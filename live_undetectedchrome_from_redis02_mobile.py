@@ -431,6 +431,8 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
         print(f"[Driver-Slot{slot_index}] 📐 Fallback Size: {mobile_width}x{mobile_height}")
         print(f"[Driver-Slot{slot_index}] 🎭 Fallback UA: {ua[:80]}...")
     
+    options.set_capability("pageLoadStrategy", "eager") ###속도개선
+    
     options.add_argument(f"--timezone-id={profile['timezone']}")
     options.add_argument(f"--lang={profile['locale']}")
 
@@ -1125,7 +1127,66 @@ def get_and_error_if_new_tab(driver, url, *, max_wait=2.0, poll=0.05, close_new=
         time.sleep(poll)
 
     return True
-        
+
+def is_video_playing(driver):
+    script = """
+        var video = document.querySelector('video.html5-main-video');
+        if (!video) return false;
+        return !video.paused && video.readyState >= 3 && video.currentTime > 0;
+    """
+    # 결과가 None이거나 에러가 날 경우를 대비해 bool()로 감싸기
+    try:
+        return bool(driver.execute_script(script))
+    except:
+        return False
+
+def detect_bot_suspicion_by_link(driver):
+    """지정된 봇 확인(YouTube/Google 지원) 링크가 있는지 검사 (Selenium driver용)"""
+    try:
+        # 감지할 링크 패턴들 (비교는 lower로 통일)
+        target_link_patterns = [
+            "https://support.google.com/youtube/answer/3037019",
+            "/answer/3037019",
+            "3037019",
+            "#zippy=%2ccheck-that-youre-signed-into-youtube",
+            "answer/3037019#zippy",
+        ]
+        target_link_patterns = [p.lower() for p in target_link_patterns]
+
+        # 페이지의 모든 링크 검사
+        try:
+            all_links = driver.find_elements("css selector", "a[href]")
+        except Exception:
+            all_links = []
+
+        link_count = len(all_links)
+        print(f"   [Link Check] 페이지 내 링크 수: {link_count}")
+
+        # 모든 링크 순회 (성능을 위해 최대 100개만)
+        for i in range(min(link_count, 100)):
+            try:
+                href = all_links[i].get_attribute("href")
+                if not href:
+                    continue
+
+                href_lower = href.lower()
+
+                for pattern in target_link_patterns:
+                    if pattern in href_lower:
+                        print(f"   [Link Check] ✅ 발견: {href[:100]}...")
+                        print(f"   [Link Check] ✅ 패턴 매칭: {pattern}")
+                        return True
+            except Exception:
+                continue
+
+        print("   [Link Check] ❌ 타겟 링크 없음")
+        return False
+
+    except Exception as e:
+        print(f"   [Link Check] ⚠️ 오류: {e}")
+        return False
+
+                
 # ===================== 메인 워커 =====================
 def monitor_service(
     url: str,
@@ -1229,6 +1290,10 @@ def monitor_service(
             print(f"[Slot-{slot_index}] ⏰ 에러페이지로 의심. 세션 종료.")
             return
         
+        if detect_bot_suspicion_by_link(driver) :
+            print(f"[Slot-{slot_index}] ⏰ 봇의심페이지 의심. 세션 종료.")
+            return            
+        
         remaining_for_load = hard_deadline - time.time()
         if remaining_for_load <= 0:
             print(f"[Slot-{slot_index}] ⏰ 브라우징 최대 시간({BROWSE_MAX_SECONDS}초) 도달(로딩 대기 중). 세션 종료.")
@@ -1253,6 +1318,9 @@ def monitor_service(
         if remaining <= 0:
             print(f"[Slot-{slot_index}] ⏰ 브라우징 최대 시간({BROWSE_MAX_SECONDS}초) 도달(체류 전). 세션 종료.")
             return
+        
+        wait = WebDriverWait(driver, 60)
+        is_ready = wait.until(is_video_playing)
 
         stay_time = max(10, random.gauss(STAY_DURATION, 10))
         stay_time = min(stay_time, remaining)
