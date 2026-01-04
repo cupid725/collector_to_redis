@@ -359,6 +359,7 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
     tmp_root.mkdir(parents=True, exist_ok=True)
     temp_dir = tempfile.mkdtemp(prefix=f"monitor_slot_{slot_index}_", dir=str(tmp_root))
     options.add_argument(f"--user-data-dir={temp_dir}")
+
     
     # ✅ 랜덤 모바일 디바이스 선택
     mobile_width = 412  # 기본값
@@ -431,7 +432,7 @@ def create_undetected_driver(profile: Dict[str, Any], proxy: Optional[str], slot
         print(f"[Driver-Slot{slot_index}] 📐 Fallback Size: {mobile_width}x{mobile_height}")
         print(f"[Driver-Slot{slot_index}] 🎭 Fallback UA: {ua[:80]}...")
     
-    options.set_capability("pageLoadStrategy", "eager") ###속도개선
+    #options.set_capability("pageLoadStrategy", "eager") ###속도개선
     
     options.add_argument(f"--timezone-id={profile['timezone']}")
     options.add_argument(f"--lang={profile['locale']}")
@@ -1083,11 +1084,46 @@ def safe_get(driver, url: str, index: int, page_load_timeout: float = 30.0) -> b
 
     return True
 
+def get_with_soft_retry(driver, url, max_retry=2):
+    for attempt in range(max_retry + 1):
+        try:
+            driver.get(url)
+
+            # body만 뜨면 진행 (DOM만)
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+        except TimeoutException:
+            # body 못뜬 경우도 에러 취급
+            pass
+
+        # 에러 페이지/네트워크 에러면 잠깐 대기 후 재시도
+        if _page_looks_like_error(driver):
+            # 1) 잠깐 기다렸다가 (프록시가 늦게 붙는 케이스)
+            time.sleep(2 + attempt * 2)
+
+            # 2) 새로고침 or 재접속
+            try:
+                driver.refresh()
+            except Exception:
+                # refresh가 깨지면 다시 get
+                pass
+            continue
+
+        # 정상으로 보이면 종료
+        return True
+
+    return False
+
+
 def get_and_error_if_new_tab(driver, url, *, max_wait=2.0, poll=0.05, close_new=True):
+
     before_handles = set(driver.window_handles)
     before_current = driver.current_window_handle if before_handles else None
 
     driver.get(url)
+    WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
 
     deadline = time.time() + max_wait
     new_infos = []

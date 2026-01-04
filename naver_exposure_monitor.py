@@ -31,10 +31,10 @@ from selenium.webdriver.support import expected_conditions as EC
 # =============================================================================
 # 0) 사용자 설정
 # =============================================================================
-MAX_THREADS = 2  
+MAX_THREADS = 1  
 
 ENABLE_WINDOW_SIZE = True
-WINDOW_WIDTH = 600
+WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 400
 ENABLE_WINDOW_JITTER = False
 WINDOW_JITTER_RANGE = 80
@@ -513,6 +513,30 @@ def simulate_natural_scroll(driver, min_actions: int = 6, max_actions: int = 12)
         driver.execute_script("window.scrollBy(0, arguments[0]);", jiggle)
         time.sleep(random.uniform(0.2, 0.6))
 
+from selenium.webdriver.common.action_chains import ActionChains
+def wait_and_mouse_click_live_more(driver, timeout=60):
+    
+    try :
+        sel = (By.CSS_SELECTOR, "li a[href='/live-more']")
+
+        # 1) 클릭 가능 상태까지 대기
+        elem = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(sel))
+
+        # 2) 화면 중앙으로 스크롤(가끔 오버레이/고정헤더 때문에 필요)
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+            elem
+        )
+
+        # 3) “마우스로” 이동 후 클릭
+        ActionChains(driver).move_to_element(elem).pause(0.2).click(elem).perform()
+        logging.info("📥 [동작 성공] /live-more") 
+    except :
+        logging.info("📥 [동작 실패] /live-more") 
+        return False
+    
+    return True
+
 # =============================================================================
 # 5) 작업 로직 (IP 노출 필터링 기능 통합)
 # =============================================================================
@@ -652,16 +676,27 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
                         child_handle = None
 
                     # 클릭 후 실제 로딩 대기
-                    try:
-                        #WebDriverWait(driver, 10).until(
-                        #    lambda d: d.execute_script("return document.readyState") in ("interactive", "complete")
-                        #)
-                        WebDriverWait(driver, 10).until(
-                            lambda d: d.execute_script("return document.readyState") != "loading"
-                        )    
-                    except:
-                        pass
+                    #try:#
+
+                    #    #WebDriverWait(driver, 10).until(
+                    #    #    lambda d: d.execute_script("return document.readyState") != "loading"
+                    #    #)
+                    #    WebDriverWait(driver, 10).until(
+                    #        EC.visibility_of_element_located((By.CSS_SELECTOR, "li a[href='/live-more']"))
+                    #    )    
+                    #except:
+                    #    pass
                     # ✅ 로딩 끝나면 자연스러운 스크롤 다운/업
+                    #random_delay(30.0, 60.0)
+                    #simulate_natural_scroll(driver)
+                    #random_delay(300.0, 360.0)
+                    random_delay(30.0, 60.0)
+                    
+                    if not wait_and_mouse_click_live_more(driver):
+                        rr.clicked_ok = False
+                        rr.note = "LIVE_MORE_CLICK_FAILED"
+                        rr.error = "LIVE_MORE_CLICK_FAILED"
+                        return  # ✅ 즉시 finally로 감
                     random_delay(30.0, 60.0)
                     simulate_natural_scroll(driver)
                     random_delay(300.0, 360.0)
