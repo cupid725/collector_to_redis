@@ -33,8 +33,10 @@ SEARCH_KEYWORDS = [
 
 TARGET_URL = "https://www.youtube.com/shorts/eto2wO2i0iA?feature=share"
 TARGET_URL1 = "https://www.youtube.com/shorts/eto2wO2i0iA?feature=share"
+TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
+TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac" #새해인사
 
-NUM_BROWSERS = 1
+NUM_BROWSERS = 2
 REDIS_ZSET_ALIVE = "proxies:alive"
 REDIS_ZSET_LEASE = "proxies:lease"
 
@@ -76,35 +78,58 @@ def get_region_from_proxy(proxy_str):
 
 def handle_youtube_consent(page, slot_index):
     """
-    Playwright 원본 로직을 참고하여 텍스트가 아닌 구조적 셀렉터로 Consent를 처리합니다.
-    구글/유튜브의 동의 창은 보통 특정 form 내부의 두 번째 혹은 마지막 버튼인 경우가 많습니다.
+    Consent 페이지에서 selectors로 버튼을 찾지 않고,
+    <form action="https://consent.youtube.com/save" method="POST"> 를 찾아 submit()으로 처리.
+    (DrissionPage page 객체 기준)
     """
     try:
-        # 1. 특정 클래스나 구조를 가진 버튼 셀렉터 (Playwright 소스 기반 최적화)
-        # 구글 Consent 페이지의 '동의' 버튼은 보통 특정 form 안의 2번째 또는 마지막 버튼임
-        selectors = [
-            "form[action*='consent.google.com'] button", # Consent 폼 내의 버튼
-            "form[action*='google.com/consent'] button",
-            "div.VfPpkd-LgbsSe", # 구글 표준 버튼 클래스
-            "button[aria-label*='Agree']", 
-            "button[aria-label*='Accept']"
-        ]
-        
-        for selector in selectors:
-            buttons = page.eles(selector, timeout=1)
-            if buttons:
-                # 보통 동의 버튼은 리스트의 마지막(last)에 위치하는 경우가 많음
-                target_btn = buttons[-1] 
-                print(f"[Slot-{slot_index}] 🛡️ Consent 페이지 감지 (Selector: {selector}). 버튼 클릭 시도.")
-                target_btn.click()
+        # consent 페이지가 아닐 수도 있으니 가벼운 가드
+        try:
+            cur_url = (page.url or "").lower()
+        except:
+            cur_url = ""
+
+        # 1) consent 저장용 form 탐색
+        form = page.ele("css:form[action^='https://consent.youtube.com/save']", timeout=1)
+        if not form:
+            # 변형 케이스 대비 (혹시 action이 절대경로가 아니거나 파라미터가 붙는 경우)
+            form = page.ele("css:form[action*='consent.youtube.com/save']", timeout=1)
+
+        if not form:
+            return False
+
+        print(f"[Slot-{slot_index}] 🛡️ Consent form 감지 → submit 시도")
+
+        # 2) JS로 submit (가장 깔끔)
+        try:
+            page.run_js("""
+                (function(){
+                    const f = document.querySelector("form[action^='https://consent.youtube.com/save']")
+                           || document.querySelector("form[action*='consent.youtube.com/save']");
+                    if (f) { f.submit(); return true; }
+                    return false;
+                })();
+            """)
+            page.wait.load_start()
+            return True
+        except Exception as e:
+            print(f"[Slot-{slot_index}] ⚠️ Consent submit(JS) 실패: {str(e)[:120]}")
+
+        # 3) Fallback: form 내부 버튼 클릭 (submit이 막히는 변형 대비)
+        try:
+            btn = form.ele("css:button", timeout=1)
+            if btn:
+                btn.click()
                 page.wait.load_start()
                 return True
-                
-        # 2. 만약 위 방법으로 안될 경우 특정 위치 기반 클릭 (Playwright에서 자주 쓰는 방식)
-        # 동의 창이 떴을 때 '동의' 버튼의 일반적인 좌표 영역을 강제 클릭할 수도 있음
+        except Exception as e:
+            print(f"[Slot-{slot_index}] ⚠️ Consent 버튼 클릭 fallback 실패: {str(e)[:120]}")
+
     except Exception as e:
-        print(f"[Slot-{slot_index}] ⚠️ Consent 처리 중 에러: {e}")
+        print(f"[Slot-{slot_index}] ⚠️ Consent 처리 중 에러: {str(e)[:120]}")
+
     return False
+
 
 # [1] 프로그램 시작 시 딱 한 번만 호출되도록 메인 진입점에 넣어주세요
 from playwright.sync_api import sync_playwright
@@ -188,227 +213,313 @@ def check_network_error(page, slot_index):
 import time
 import re
 
-def wait_until_dom_not_empty(page, timeout=30, min_html_len=2000, interval=0.3):
+def wait_until_dom_not_empty(page, timeout=30, min_html_len=1500, interval=0.5):
     """
-    - page.html이 너무 짧거나 body가 비어있으면 계속 대기
+    page.html이 너무 짧거나 body가 비어있으면 계속 대기
     - timeout 초 내에 조건 만족하면 True, 아니면 False
     """
+    import re
     end = time.monotonic() + timeout
-    last_len = -1
     empty_body_re = re.compile(r"<body[^>]*>\s*</body>", re.I | re.S)
 
     while time.monotonic() < end:
         try:
+            # ✅ 페이지 연결 상태 체크
             html = page.html or ""
             l = len(html.strip())
 
             # 완전 텅빈 html / 거의 about:blank 수준이면 대기
             if l < min_html_len:
-                last_len = l
                 time.sleep(interval)
                 continue
 
             # body가 통째로 비어있는 형태면 대기
             if empty_body_re.search(html):
-                last_len = l
                 time.sleep(interval)
                 continue
 
             return True
-        except Exception:
+        except Exception as e:
+            # ✅ 연결 끊김 감지
+            error_msg = str(e)
+            if "连接已断开" in error_msg or "断开" in error_msg or "disconnected" in error_msg.lower():
+                print(f"🛑 브라우저 연결 끊김 감지 (DOM 체크)")
+                return False
             time.sleep(interval)
 
     return False
 
-def monitor_service(url, proxy, slot_index, stop_event, r):
+def retry_page_load(page, url, slot_index, max_retries=None, retry_delay=None):
+    """
+    프록시 환경에서 페이지 로드 재시도 로직
+    
+    Args:
+        page: DrissionPage 인스턴스
+        url: 로드할 URL
+        slot_index: 슬롯 번호
+        max_retries: 최대 재시도 횟수 (None이면 config 사용)
+        retry_delay: 재시도 간 대기 시간 (None이면 config 사용)
+    
+    Returns:
+        bool: 성공 여부
+    """
+    if max_retries is None:
+        max_retries = getattr(config, 'MAX_RETRIES', 3)
+    if retry_delay is None:
+        retry_delay = getattr(config, 'RETRY_DELAY', 5)
+    
+    timeout = getattr(config, 'PAGE_LOAD_TIMEOUT', 300)
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"[Slot-{slot_index}] 🌐 페이지 로드 시도 {attempt}/{max_retries}: {url}")
+            page.get(url, timeout=timeout)
+            print(f"[Slot-{slot_index}] ✅ 로드 완료 (시도 {attempt})")
+            return True
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[Slot-{slot_index}] ⚠️ 로드 실패 (시도 {attempt}/{max_retries}): {error_msg[:100]}")
+            
+            if attempt < max_retries:
+                wait_time = retry_delay * attempt  # 점진적 증가 (5초 → 10초 → 15초)
+                print(f"[Slot-{slot_index}] ⏳ {wait_time}초 후 재시도...")
+                time.sleep(wait_time)
+            else:
+                print(f"[Slot-{slot_index}] ❌ 최대 재시도 횟수 초과")
+                return False
+    
+    return False
+
+def _wait_youtube_shorts_ready(page, slot_index, timeout_sec=120):
+    """
+    프록시 환경 최적화: 더 관대한 대기 + 재시도 로직
+    """
+    end = time.monotonic() + timeout_sec
+    refresh_attempted = False
+    
+    # ========================================
+    # ✅ 1단계: 네트워크 안정화 (더 긴 대기)
+    # ========================================
+    def _wait_network_idle(max_wait=None):
+        """네트워크가 조용해질 때까지 대기"""
+        if max_wait is None:
+            max_wait = getattr(config, 'NETWORK_IDLE_WAIT', 60)
+        
+        idle_start = time.monotonic()
+        idle_threshold = 3.0  # 2초 → 3초 (프록시는 더 느림)
+        last_activity = time.monotonic()
+        prev_html_len = 0
+        
+        print(f"[Slot-{slot_index}] ⏳ 네트워크 안정화 대기 중 (최대 {max_wait}초)...")
+        
+        while time.monotonic() - idle_start < max_wait:
+            # ✅ 브라우저 종료 감지
+            if stop_event.is_set():
+                return False
+            
+            try:
+                # ✅ 페이지 연결 상태 체크
+                _ = page.url  # 연결 끊어지면 예외 발생
+                cur_html_len = len(page.html or "")
+                
+                if cur_html_len != prev_html_len:
+                    last_activity = time.monotonic()
+                    prev_html_len = cur_html_len
+                
+                # 3초간 변화 없음 = idle
+                if time.monotonic() - last_activity > idle_threshold:
+                    elapsed = time.monotonic() - idle_start
+                    print(f"[Slot-{slot_index}] ✅ 네트워크 안정화 완료 ({elapsed:.1f}초)")
+                    return True
+                    
+            except Exception as e:
+                # ✅ 연결 끊김 감지
+                error_msg = str(e)
+                if "连接已断开" in error_msg or "断开" in error_msg or "disconnected" in error_msg.lower():
+                    print(f"[Slot-{slot_index}] 🛑 브라우저 연결 끊김 감지")
+                    return False
+                print(f"[Slot-{slot_index}] ⚠️ HTML 체크 오류: {error_msg[:100]}")
+            
+            time.sleep(0.5)  # 0.3 → 0.5초 (프록시 부하 감소)
+        
+        print(f"[Slot-{slot_index}] ⏰ 네트워크 안정화 타임아웃 (진행)")
+        return True
+    
+    # ========================================
+    # ✅ 2단계: 컨텐츠 확인 (관대한 조건)
+    # ========================================
+    def _check_content_ready(max_attempts=30):  # 20 → 30
+        """실제 video 컨텐츠가 있는지 확인"""
+        element_timeout = getattr(config, 'ELEMENT_WAIT_TIMEOUT', 45)
+        
+        for attempt in range(max_attempts):
+            # ✅ 브라우저 종료 감지
+            if stop_event.is_set():
+                return False, "stopped"
+            
+            try:
+                # ✅ 페이지 연결 상태 체크
+                cur_url = page.url  # 연결 끊어지면 예외 발생
+                
+                # Auth/Challenge 체크
+                if _is_auth_or_challenge_url(cur_url):
+                    if "consent.youtube.com" in cur_url.lower():
+                        from main_drission import handle_youtube_consent
+                        if handle_youtube_consent(page, slot_index):
+                            time.sleep(3)  # 동의 후 충분한 대기
+                            continue
+                    return False, "auth_or_challenge"
+                
+                # 네트워크 에러
+                from main_drission import check_network_error
+                if check_network_error(page, slot_index):
+                    return False, "net_error"
+                
+                # Captcha
+                if _has_captcha_dom(page):
+                    return False, "captcha_dom"
+                
+                # HTML 최소 길이 (더 관대하게)
+                html_len = len(page.html or "")
+                if html_len < 1500:  # 2000 → 1500
+                    time.sleep(1.0)  # 0.5 → 1.0초
+                    continue
+                
+                # YouTube shell
+                if not _has_youtube_shell(page):
+                    time.sleep(1.0)
+                    continue
+                
+                # Video element + stream
+                st = _video_stream_state(page)
+                if st and st.get("src") and st.get("rs", 0) >= 1:
+                    return True, "ok"
+                
+            except Exception as e:
+                # ✅ 연결 끊김 감지
+                error_msg = str(e)
+                if "连接已断开" in error_msg or "断开" in error_msg or "disconnected" in error_msg.lower():
+                    print(f"[Slot-{slot_index}] 🛑 브라우저 연결 끊김 감지 (컨텐츠 체크)")
+                    return False, "browser_closed"
+                print(f"[Slot-{slot_index}] ⚠️ 컨텐츠 체크 오류: {error_msg[:100]}")
+            
+            time.sleep(1.0)  # 0.5 → 1.0초
+        
+        return False, "content_not_ready"
+    
+    # ========================================
+    # 메인 로직
+    # ========================================
+    while time.monotonic() < end:
+        # 1단계: 네트워크 안정화
+        if not _wait_network_idle():
+            return False, "stopped"
+        
+        # 2단계: 컨텐츠 확인
+        ok, reason = _check_content_ready()
+        
+        if ok:
+            return True, "ok"
+        
+        # 3단계: Refresh (1회만)
+        if not refresh_attempted and reason == "content_not_ready":
+            print(f"[Slot-{slot_index}] 🔄 컨텐츠 미확인 → Refresh 시도")
+            try:
+                page.refresh()
+                refresh_attempted = True
+                time.sleep(4)  # 2 → 4초 (refresh 후 충분한 대기)
+                continue
+            except Exception as e:
+                print(f"[Slot-{slot_index}] ⚠️ Refresh 실패: {e}")
+                return False, "refresh_failed"
+        
+        # Refresh 후에도 실패
+        if refresh_attempted:
+            print(f"[Slot-{slot_index}] ❌ Refresh 후에도 실패: {reason}")
+            return False, reason
+        
+        # 다른 이유로 실패
+        return False, reason
+    
+    return False, "timeout"
+
+
+# ========================================
+# 헬퍼 함수들 (기존 유지)
+# ========================================
+
+def _is_auth_or_challenge_url(cur_url: str) -> bool:
+    if not cur_url:
+        return False
+    u = cur_url.lower()
+    return any(x in u for x in [
+        "consent.youtube.com",
+        "accounts.google.com",
+        "/sorry/",
+        "challenge",
+        "captcha",
+        "verify",
+        "signin",
+    ])
+
+def _has_captcha_dom(page) -> bool:
+    try:
+        if page.ele('css:iframe[src*="recaptcha"]', timeout=0.3):
+            return True
+    except:
+        pass
+    try:
+        if page.ele('css:iframe[title*="recaptcha"]', timeout=0.3):
+            return True
+    except:
+        pass
+    return False
+
+def _has_youtube_shell(page) -> bool:
+    try:
+        return bool(page.ele("tag:ytd-app", timeout=0.3) or page.ele("tag:ytm-app", timeout=0.3))
+    except:
+        return False
+
+def _video_stream_state(page):
+    try:
+        return page.run_js("""
+            const v = document.querySelector('video');
+            if (!v) return null;
+            return {
+                src: (v.currentSrc || v.src || ''),
+                rs: v.readyState,
+                ns: v.networkState,
+                paused: v.paused
+            };
+        """)
+    except:
+        return None
+
+
+
+# ========================================
+# ✅ monitor_service 함수 수정 (핵심)
+# ========================================
+
+def monitor_service_optimized(url, proxy, slot_index, stop_event, r):
+    """프록시 최적화 버전 - 재시도 로직 추가"""
     import time
     import random
+    from stealth_browser import StealthMobileBrowser
+    from MobileHumanEvent import MobileHumanEvent
 
     browser_wrapper = None
     start_time = time.time()
     session_timeout = random.randint(config.SLOT_LIFE_MIN, config.SLOT_LIFE_MAX)
-
-    def _is_auth_or_challenge_url(cur_url: str) -> bool:
-        if not cur_url:
-            return False
-        u = cur_url.lower()
-        return any(x in u for x in [
-            "consent.youtube.com",
-            "accounts.google.com",
-            "/sorry/",
-            "challenge",
-            "captcha",
-            "verify",
-            "signin",
-        ])
-
-    def _has_captcha_dom() -> bool:
-        try:
-            if page.ele('css:iframe[src*="recaptcha"]', timeout=0.2):
-                return True
-        except:
-            pass
-        try:
-            if page.ele('css:iframe[title*="recaptcha"]', timeout=0.2):
-                return True
-        except:
-            pass
-        return False
-
-    def _has_youtube_shell() -> bool:
-        try:
-            return bool(page.ele("tag:ytd-app", timeout=0.2) or page.ele("tag:ytm-app", timeout=0.2))
-        except:
-            return False
-
-    def _video_stream_state():
-        try:
-            return page.run_js("""
-                const v = document.querySelector('video');
-                if (!v) return null;
-                return {
-                    src: (v.currentSrc || v.src || ''),
-                    rs: v.readyState,
-                    ns: v.networkState,
-                    paused: v.paused
-                };
-            """)
-        except:
-            return None
-
-    def _wait_youtube_shorts_ready(timeout_sec=60):
-        """
-        1단계: Network idle 대기
-        2단계: 컨텐츠 확인
-        3단계: 실패 시 refresh 후 재시도
-        """
-        end = time.monotonic() + timeout_sec
-        refresh_attempted = False
-        
-        def _wait_network_idle(max_wait=30):
-            """네트워크가 2초간 조용해질 때까지 대기"""
-            idle_start = time.monotonic()
-            idle_threshold = 2.0
-            last_activity = time.monotonic()
-            
-            # 간단한 polling 방식 (CDP 이벤트 리스너는 복잡하므로)
-            prev_html_len = 0
-            
-            while time.monotonic() - idle_start < max_wait:
-                if stop_event.is_set():
-                    return False
-                
-                try:
-                    cur_html_len = len(page.html or "")
-                    # HTML 길이 변화 = 네트워크 활동
-                    if cur_html_len != prev_html_len:
-                        last_activity = time.monotonic()
-                        prev_html_len = cur_html_len
-                    
-                    # 2초간 변화 없음 = idle
-                    if time.monotonic() - last_activity > idle_threshold:
-                        return True
-                        
-                except:
-                    pass
-                
-                time.sleep(0.3)
-            
-            return True  # timeout이어도 일단 진행
-        
-        def _check_content_ready(max_attempts=20):
-            """실제 video 컨텐츠가 있는지 확인"""
-            for attempt in range(max_attempts):
-                if stop_event.is_set():
-                    return False, "stopped"
-                
-                try:
-                    cur_url = page.url
-                    
-                    # Auth/Challenge 체크
-                    if _is_auth_or_challenge_url(cur_url):
-                        if "consent.youtube.com" in cur_url.lower():
-                            if handle_youtube_consent(page, slot_index):
-                                time.sleep(2)
-                                continue
-                        return False, "auth_or_challenge"
-                    
-                    # 네트워크 에러
-                    if check_network_error(page, slot_index):
-                        return False, "net_error"
-                    
-                    # Captcha
-                    if _has_captcha_dom():
-                        return False, "captcha_dom"
-                    
-                    # HTML 최소 길이
-                    html_len = len(page.html or "")
-                    if html_len < 2000:
-                        time.sleep(0.5)
-                        continue
-                    
-                    # YouTube shell
-                    if not _has_youtube_shell():
-                        time.sleep(0.5)
-                        continue
-                    
-                    # Video element + stream
-                    st = _video_stream_state()
-                    if st and st.get("src") and st.get("rs", 0) >= 1:
-                        return True, "ok"
-                    
-                except Exception as e:
-                    pass
-                
-                time.sleep(0.5)
-            
-            return False, "content_not_ready"
-        
-        # === 메인 로직 ===
-        
-        while time.monotonic() < end:
-            if stop_event.is_set():
-                return False, "stopped"
-            
-            # 1단계: Network idle 대기
-            print(f"[Slot-{slot_index}] 🌐 네트워크 안정화 대기 중...")
-            if not _wait_network_idle(max_wait=30):
-                return False, "stopped"
-            
-            print(f"[Slot-{slot_index}] ✅ Network idle 감지")
-            
-            # 2단계: 컨텐츠 확인 (최대 10초)
-            ok, reason = _check_content_ready(max_attempts=20)
-            
-            if ok:
-                return True, "ok"
-            
-            # 3단계: 컨텐츠 없으면 refresh (1회만)
-            if not refresh_attempted and reason == "content_not_ready":
-                print(f"[Slot-{slot_index}] 🔄 컨텐츠 미확인 → Refresh 시도")
-                try:
-                    page.refresh()
-                    refresh_attempted = True
-                    time.sleep(2)  # refresh 후 초기 대기
-                    continue  # 다시 1단계부터
-                except Exception as e:
-                    print(f"[Slot-{slot_index}] ⚠️ Refresh 실패: {e}")
-                    return False, "refresh_failed"
-            
-            # refresh도 했는데 안 되면 종료
-            if refresh_attempted:
-                print(f"[Slot-{slot_index}] ❌ Refresh 후에도 실패: {reason}")
-                return False, reason
-            
-            # 다른 이유로 실패 (auth, captcha 등)
-            return False, reason
-        
-        return False, "timeout"
+    
     print(f"\n[Slot-{slot_index}] 🚀 [START] 세션 구동 시작 (Proxy: {proxy})")
 
     try:
         # 1) 프로필/리퍼러 선택
         try:
+            from main_drission import REGION_PROFILES
             region_key = random.choice(list(REGION_PROFILES.keys()))
             profile = REGION_PROFILES[region_key]
             selected_referer = random.choice(profile.get("referers", ["https://www.google.com/"]))
@@ -419,6 +530,7 @@ def monitor_service(url, proxy, slot_index, stop_event, r):
             print(f"[Slot-{slot_index}] ⚠️ 기본 프로필 및 구글 리퍼러 사용")
 
         # 2) 브라우저 생성
+        from main_drission import PLAYWRIGHT_DEVICES
         browser_wrapper = StealthMobileBrowser(
             slot_index=slot_index,
             profile=profile,
@@ -429,20 +541,23 @@ def monitor_service(url, proxy, slot_index, stop_event, r):
         page = browser_wrapper.page
         print(f"[Slot-{slot_index}] ✨ 브라우저 초기화 완료")
 
-        # 3) 페이지 로드 - 타임아웃만 설정하고 즉시 체크하지 않음
+        # 3) ✅ 페이지 로드 - 재시도 로직 적용
         print(f"[Slot-{slot_index}] 🌐 타겟 접속 시작: {url}")
-        try:
-            page.get(url, timeout=config.PAGE_LOAD_TIMEOUT)
-        except Exception as e:
-            print(f"[Slot-{slot_index}] ⚠️ page.get() 예외 (계속 진행): {e}")
+        if not retry_page_load(page, url, slot_index):
+            print(f"[Slot-{slot_index}] ❌ [FAIL] 페이지 로드 실패 (재시도 소진)")
+            return
+        
+        # 3-1) ✅ DOM 기본 로드 확인 (빈 페이지 방지)
+        print(f"[Slot-{slot_index}] 📄 DOM 로드 확인 중...")
+        if not wait_until_dom_not_empty(page, timeout=30, min_html_len=1000):
+            print(f"[Slot-{slot_index}] ⚠️ DOM이 비어있거나 너무 작음 - 진행 시도")
 
-        # 4) 진짜 대기 - 여기서만 모든 검증 수행
+        # 4) ✅ 진짜 대기 - 여기서만 모든 검증 수행
         print(f"[Slot-{slot_index}] ⏳ 페이지 렌더링 대기 중...")
-        ok, reason = _wait_youtube_shorts_ready(timeout_sec=120)
+        ok, reason = _wait_youtube_shorts_ready(page, slot_index, timeout_sec=240)  # 120 → 180초
 
         if not ok:
             print(f"[Slot-{slot_index}] ❌ [FAIL] 준비 실패: {reason}")
-            # 디버깅용 정보 출력
             try:
                 print(f"[Slot-{slot_index}] 📊 최종 URL: {page.url}")
                 print(f"[Slot-{slot_index}] 📊 HTML 길이: {len(page.html or '')}")
@@ -489,7 +604,7 @@ def monitor_service(url, proxy, slot_index, stop_event, r):
                 human_handler.execute_random_action()
                 action_performed = True
 
-                post_delay = random.uniform(5.0, 8.0)
+                post_delay = random.uniform(8.0, 12.0)
                 print(f"[Slot-{slot_index}] 💤 추가 대기 {post_delay:.1f}초 후 세션 종료.")
                 time.sleep(post_delay)
                 break
@@ -513,109 +628,8 @@ def monitor_service(url, proxy, slot_index, stop_event, r):
             print(f"[Slot-{slot_index}] 🔄 자원 정리 및 프록시 반납.\n")
         except:
             pass
-
         
-def monitor_service_old(url, proxy, slot_index, stop_event, r):
-    browser_wrapper = None
-    start_time = time.time()
-    session_timeout = random.randint(config.SLOT_LIFE_MIN, config.SLOT_LIFE_MAX)
-    
-    print(f"\n[Slot-{slot_index}] 🚀 [START] 세션 구동 시작 (Proxy: {proxy})")
-
-    try:
-        # 1. 프로필 및 리퍼러 선택
-        try:
-            region_key = random.choice(list(REGION_PROFILES.keys()))
-            profile = REGION_PROFILES[region_key]
-            # [추가] 프로필 내 리퍼러 리스트에서 랜덤 선택
-            selected_referer = random.choice(profile.get("referers", ["https://www.google.com/"]))
-            print(f"[Slot-{slot_index}] 🌍 지역: {region_key} | 유입경로: {selected_referer}")
-        except:
-            profile = {"locale": "en-US", "timezone": "America/New_York"}
-            selected_referer = "https://www.google.com/"
-            print(f"[Slot-{slot_index}] ⚠️ 기본 프로필 및 구글 리퍼러 사용")
-
-        # 2. [수정] 브라우저 생성 시 selected_referer 전달
-        browser_wrapper = StealthMobileBrowser(
-            slot_index=slot_index, 
-            profile=profile, 
-            proxy=proxy, 
-            devices_dict=PLAYWRIGHT_DEVICES,
-            referer=selected_referer
-        )
-        page = browser_wrapper.page
-        print(f"[Slot-{slot_index}] ✨ 브라우저 초기화 완료")
-
-        # 3. [수정] 페이지 접속 (Referer 적용)
-        print(f"[Slot-{slot_index}] 🌐 타겟 접속 시작: {url}")
-        page.get(url, timeout=config.PAGE_LOAD_TIMEOUT)
-        print(f"[Slot-{slot_index}] 🌐 타겟 접속 리턴: {url}")
-        # 4. 네트워크 에러 체크
-        if check_network_error(page, slot_index):
-            print(f"[Slot-{slot_index}] ❌ [ERROR] 네트워크 에러 감지. 세션 종료.")
-            #return
-
-        # 5. 영상 로딩 대기 및 검증
-        print(f"[Slot-{slot_index}] ⏳ 영상 재생 확인 중...")
-        if not page.wait.ele_displayed('tag:video', timeout=20):
-            print(f"[Slot-{slot_index}] ❌ [FAIL] 영상 로드 실패")
-            return
-        
-        if "m.youtube.com" not in page.url:
-            print(f"[Slot-{slot_index}] ❌ [FAIL] 비정상 주소: {page.url[:40]}")
-            return
-
-        # 6. 체류 및 액션 시퀀스
-        fixed_action_time = 80 
-        base_stay = random.randint(45, 90)
-        stay_time = base_stay + fixed_action_time
-        stay_start = time.time()
-        
-        from MobileHumanEvent import MobileHumanEvent
-        human_handler = MobileHumanEvent(page)
-        action_performed = False
-
-        print(f"[Slot-{slot_index}] ▶️ 재생 확인. {stay_time}초 시청 루프 시작.")
-
-        while time.time() - stay_start < stay_time:
-            if stop_event.is_set(): break
-            try:
-                _ = page.url 
-            except:
-                print(f"[Slot-{slot_index}] 🛑 브라우저 종료 감지")
-                break
-
-            elapsed = int(time.time() - stay_start)
-
-            # 40초 도달 시 액션 실행
-            if not action_performed and elapsed >= fixed_action_time:
-                print(f"\n[Slot-{slot_index}] 🔥 [ACTION] 40초 도달! 랜덤 액션 수행")
-                human_handler.execute_random_action()
-                action_performed = True
-                
-                post_delay = random.uniform(5.0, 8.0)
-                print(f"[Slot-{slot_index}] 💤 추가 대기 {post_delay:.1f}초 후 세션 종료.")
-                time.sleep(post_delay)
-                break 
-
-            if elapsed > 0 and elapsed % 15 == 0:
-                print(f"[Slot-{slot_index}] 📺 시청 진행 중... ({elapsed}s / {stay_time}s)")
-            
-            time.sleep(1)
-
-        print(f"[Slot-{slot_index}] ✨ [SUCCESS] 미션 완료.")
-
-    except Exception as e:
-        print(f"[Slot-{slot_index}] ❌ [CRITICAL] {e}")
-    finally:
-        if browser_wrapper:
-            browser_wrapper.quit()
-        try:
-            r.zrem(config.REDIS_LEASE_KEY, proxy)
-            r.zadd(config.REDIS_ALIVE_KEY, {proxy: int(time.time()) + 60})
-            print(f"[Slot-{slot_index}] 🔄 자원 정리 및 프록시 반납.\n")
-        except: pass
-        
+      
 def main():
     r = redis.Redis(host='127.0.0.1', port=6379, db=0, decode_responses=True)
     active_slots = {}
@@ -639,7 +653,7 @@ def main():
                         if proxy:
                             url = TARGET_URL if s % 2 == 0 else TARGET_URL1
                             t = threading.Thread(
-                                target=monitor_service,
+                                target=monitor_service_optimized,
                                 args=(url, proxy, s, stop_event, r),
                                 daemon=True,
                                 name=f"Slot-{s}"

@@ -4,6 +4,7 @@ import subprocess
 import time
 import random
 from DrissionPage import ChromiumPage, ChromiumOptions
+import config
 
 class StealthMobileBrowser:
     def __init__(self, slot_index: int, profile: dict, proxy: str = None, devices_dict: dict = None, referer: str = None):
@@ -22,7 +23,6 @@ class StealthMobileBrowser:
         self.page = self._create_browser()
 
     def _force_clean_up(self):
-        # 포트 점유 프로세스 강제 종료 (Windows)
         try:
             cmd = (
                 f'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :{self.port} ^| findstr LISTENING\') '
@@ -37,10 +37,6 @@ class StealthMobileBrowser:
         os.makedirs(self.temp_dir, exist_ok=True)
 
     def _pick_device_profile(self):
-        """
-        devices_dict가 없거나 비어있어도 '모바일스러운' 기본 조합을 리턴.
-        DPR은 과확대를 막기 위해 2로 상한.
-        """
         default = {
             "name": "Fallback Mobile (390x844)",
             "user_agent": (
@@ -102,38 +98,86 @@ class StealthMobileBrowser:
         locale = self.profile.get("locale", "en-US")
         timezone = self.profile.get("timezone", "America/New_York")
         co.set_argument(f"--lang={locale}")
-        #######################
-        # ✅ 추가: 페이지 로드 전략 명시
-        co.set_argument('--disable-features=NetworkService')  # 네트워크 지연 감소
-        co.set_argument('--disable-features=VizDisplayCompositor')  # 렌더링 최적화
+
+        # ========================================
+        # ✅ 프록시 환경 최적화 옵션 (대폭 강화)
+        # ========================================
         
-        # ✅ GPU 가속 (렌더링 속도 향상)
+        # 1. 연결 최적화
+        co.set_argument('--disable-features=NetworkService')
+        co.set_argument('--disable-features=VizDisplayCompositor')
+        co.set_argument('--enable-features=NetworkServiceInProcess')  # 프록시 안정성 향상
+        
+        # 2. 타임아웃 증가
+        co.set_argument('--load-extension-timeout=300000')  # 5분
+        co.set_argument('--no-proxy-server-timeout')  # 프록시 타임아웃 무시
+        
+        # 3. 메모리/캐시 최적화
+        co.set_argument('--disk-cache-size=536870912')  # 512MB (2배 증가)
+        co.set_argument('--media-cache-size=536870912')
+        co.set_argument('--aggressive-cache-discard')  # 적극적 메모리 관리
+        
+        # 4. GPU 가속 (렌더링 속도 향상)
         co.set_argument('--enable-gpu-rasterization')
         co.set_argument('--enable-zero-copy')
+        co.set_argument('--enable-accelerated-video-decode')
         
-        # ✅ 캐시/프리로드 설정
-        co.set_argument('--disk-cache-size=268435456')  # 256MB
-        co.set_argument('--media-cache-size=268435456')
+        # 5. 프리페치 비활성화 (프록시 부하 감소)
+        co.set_argument('--dns-prefetch-disable')
+        co.set_argument('--disable-features=Prerender2')
         
-        # ✅ DNS prefetch
-        co.set_argument('--dns-prefetch-disable')  # 역설적이지만 프록시 환경에선 더 빠를 수 있음
+        # 6. 병렬 연결 증가 (느린 프록시 대응)
+        co.set_argument('--max-connections-per-host=10')  # 기본 6 → 10
+        co.set_argument('--max-connections-per-proxy=32')  # 기본 8 → 32
         
-        #######################
+        # 7. HTTP/2 최적화
+        co.set_argument('--enable-quic')  # QUIC 프로토콜 (더 빠른 연결)
+        co.set_argument('--enable-features=NetworkTimeServiceQuerying')
+        
+        # 8. 리소스 로딩 최적화 (선택적)
+        if getattr(config, 'DISABLE_IMAGES', False):
+            co.set_argument('--blink-settings=imagesEnabled=false')
+            print(f"[Slot-{self.slot_index}] 🚫 이미지 로딩 비활성화")
+        
+        # 9. 프록시 전용 플래그
+        co.set_argument('--proxy-bypass-list=<-loopback>')  # 로컬 우회
+        co.set_argument('--force-fieldtrials=*NetworkIsolationKey/Enabled')
+        
+        # ========================================
 
         if self.proxy:
             co.set_proxy(self.proxy)
+            print(f"[Slot-{self.slot_index}] 🌐 프록시 설정: {self.proxy[:50]}...")
 
-        page = ChromiumPage(co)
-        ###############################
-        # ✅ 추가: Performance 관련 CDP 설정
+        # 페이지 생성 (타임아웃 증가)
         try:
-            page.run_cdp("Network.enable")
-            page.run_cdp("Network.setCacheDisabled", cacheDisabled=False)  # 캐시 활성화
-        except:
-            pass
-        ###############################
+            page = ChromiumPage(co)
+        except Exception as e:
+            print(f"[Slot-{self.slot_index}] ❌ 브라우저 생성 실패: {e}")
+            raise
 
-        # 1) webdriver 흔적 최소화: 문서 시작부터 주입 시도
+        # ========================================
+        # ✅ CDP 최적화 설정 (프록시 환경)
+        # ========================================
+        try:
+            # 1. 네트워크 캐시 활성화
+            page.run_cdp("Network.enable")
+            page.run_cdp("Network.setCacheDisabled", cacheDisabled=False)
+            
+            # 2. 타임아웃 증가 (CDP 레벨)
+            page.run_cdp("Runtime.enable")
+            page.run_cdp("Runtime.setMaxCallStackSizeToCapture", size=0)  # 스택 추적 비활성화 (성능 향상)
+            
+            # 3. 우선순위 낮은 리소스 지연 로드
+            page.run_cdp("Network.setBypassServiceWorker", bypass=True)
+            
+            print(f"[Slot-{self.slot_index}] ✅ CDP 최적화 완료")
+        except Exception as e:
+            print(f"[Slot-{self.slot_index}] ⚠️ CDP 설정 일부 실패: {e}")
+
+        # ========================================
+        # 스텔스 JS 주입
+        # ========================================
         stealth_js = """
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         """
@@ -145,7 +189,7 @@ class StealthMobileBrowser:
             except:
                 pass
 
-        # 2) timezone / locale: CDP Emulation로 시도 (실패해도 무시)
+        # Timezone / Locale
         try:
             page.run_cdp("Emulation.setTimezoneOverride", timezoneId=timezone)
         except:
@@ -155,10 +199,9 @@ class StealthMobileBrowser:
         except:
             pass
 
-        # 3) Referer: Extra Headers로 시도 (document.referrer 덮어쓰기 X)
+        # Referer 설정
         if self.referer:
             try:
-                page.run_cdp("Network.enable")
                 page.run_cdp("Network.setExtraHTTPHeaders", headers={"Referer": self.referer})
             except:
                 pass
@@ -177,86 +220,3 @@ class StealthMobileBrowser:
                 shutil.rmtree(self.temp_dir, ignore_errors=True)
         except:
             pass
-        
-class StealthMobileBrowser_origin:
-    # [수정] referer 인자를 추가로 받도록 변경
-    def __init__(self, slot_index: int, profile: dict, proxy: str = None, devices_dict: dict = None, referer: str = None):
-        self.slot_index = slot_index
-        self.port = 15000 + slot_index
-        self.profile = profile
-        self.proxy = proxy #
-        self.devices_dict = devices_dict 
-        self.referer = referer  # [추가] 전달받은 리퍼러 저장
-        
-        self.base_path = os.path.dirname(os.path.abspath(__file__))
-        self.temp_root = os.path.join(self.base_path, "browser_temp")
-        self.temp_dir = os.path.join(self.temp_root, f"slot_{self.slot_index}")
-
-        self._force_clean_up()
-        self.page = self._create_browser()
-
-    def _force_clean_up(self):
-        try:
-            cmd = f'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :{self.port} ^| findstr LISTENING\') do taskkill /f /pid %a'
-            subprocess.call(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except: pass
-        
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir, ignore_errors=True)
-        os.makedirs(self.temp_dir, exist_ok=True)
-
-    def _create_browser(self):
-        co = ChromiumOptions()
-        co.set_local_port(self.port)
-        co.set_user_data_path(self.temp_dir)
-        
-        # Playwright 기반 기기 정보 선택 및 적용
-        device_name = "Default iPhone"
-        dpr = 3
-        if self.devices_dict:
-            device_name = random.choice(list(self.devices_dict.keys()))
-            device = self.devices_dict[device_name]
-            co.set_user_agent(device['user_agent'])
-            width = device['viewport']['width']
-            height = device['viewport']['height']
-            dpr = device.get('device_pixel_ratio', 3)
-            co.set_argument(f'--window-size={width},{height}')
-            co.set_argument(f'--force-device-scale-factor={dpr}')
-            if device.get('has_touch'):
-                co.set_argument('--blink-settings=touchEventEnabled=true')
-        
-        co.set_argument('--use-mobile-user-agent')
-        co.set_argument('--no-sandbox')
-        co.set_argument('--disable-blink-features=AutomationControlled')
-        co.set_argument('--log-level=3')
-
-        locale = self.profile.get("locale", "en-US")
-        timezone = self.profile.get("timezone", "America/New_York")
-        co.set_argument(f'--lang={locale}')
-
-        if self.proxy:
-            co.set_proxy(self.proxy)
-
-        try:
-            page = ChromiumPage(co)
-            # [수정] 리퍼러(document.referrer)까지 자바스크립트로 강제 주입
-            page.run_js(f"""
-                Object.defineProperty(navigator, 'webdriver', {{get: () => undefined}});
-                Object.defineProperty(window, 'devicePixelRatio', {{get: () => {dpr}}});
-                Object.defineProperty(document, 'referrer', {{get: () => '{self.referer}'}});
-                Intl.DateTimeFormat.prototype.resolvedOptions = () => {{
-                    return {{ timeZone: '{timezone}', locale: '{locale}' }};
-                }};
-            """)
-            print(f"[Slot-{self.slot_index}] 📱 기기: {device_name} | 🔗 Referer 주입: {self.referer}")
-            return page
-        except Exception as e:
-            raise e
-
-    def quit(self):
-        try:
-            self.page.quit()
-            time.sleep(1)
-            if os.path.exists(self.temp_dir):
-                shutil.rmtree(self.temp_dir, ignore_errors=True)
-        except: pass

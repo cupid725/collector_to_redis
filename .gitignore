@@ -6,3 +6,5 @@
 /__pycache__/
 *.pyc
 /_tmp_profiles/
+/DrissionPage/browser_temp/
+/DrissionPage/__pycache__/
