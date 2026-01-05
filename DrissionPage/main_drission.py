@@ -17,12 +17,12 @@ from stealth_browser import StealthMobileBrowser
 
 REGION_PROFILES = {}
 try:
-    if os.path.exists('region_profiles.json'):
-        with open('region_profiles.json', 'r', encoding='utf-8') as f:
+    if os.path.exists('region_profiles_mobile.json'):
+        with open('region_profiles_mobile.json', 'r', encoding='utf-8') as f:
             REGION_PROFILES = json.load(f)
         print(f"✅ 지역 프로필 로드 완료 ({len(REGION_PROFILES)}개 지역)")
     else:
-        print("⚠️ region_profiles.json 파일이 없습니다. 기본 설정(en-US)을 사용합니다.")
+        print("⚠️ region_profiles_mobile.json 파일이 없습니다. 기본 설정(en-US)을 사용합니다.")
 except Exception as e:
     print(f"❌ 지역 프로필 로드 실패: {e}")
 

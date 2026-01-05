@@ -27,6 +27,6 @@ REDIS_LEASE_KEY = "proxy:lease"
 
 # ✅ 프록시 환경 성능 설정
 ENABLE_CACHE = False  # 브라우저 캐시 활성화
-DISABLE_IMAGES = True  # 이미지 로딩 (False=로딩함, True=차단)
+DISABLE_IMAGES = False  # 이미지 로딩 (False=로딩함, True=차단)
 DISABLE_CSS = False  # CSS 로딩
 PRELOAD_STRATEGY = "minimal"  # none/minimal/aggressive

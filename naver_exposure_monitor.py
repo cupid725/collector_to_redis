@@ -692,14 +692,16 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
                     #random_delay(300.0, 360.0)
                     random_delay(30.0, 60.0)
                     
-                    if not wait_and_mouse_click_live_more(driver):
-                        rr.clicked_ok = False
-                        rr.note = "LIVE_MORE_CLICK_FAILED"
-                        rr.error = "LIVE_MORE_CLICK_FAILED"
-                        return  # ✅ 즉시 finally로 감
+                    #if not wait_and_mouse_click_live_more(driver):
+                    #    rr.clicked_ok = False
+                    #    rr.note = "LIVE_MORE_CLICK_FAILED"
+                    #    rr.error = "LIVE_MORE_CLICK_FAILED"
+                    #    return  # ✅ 즉시 finally로 감
+                    wait_and_mouse_click_live_more(driver)
+                    
                     random_delay(30.0, 60.0)
                     simulate_natural_scroll(driver)
-                    random_delay(300.0, 360.0)
+                    random_delay(30.0, 36.0)
 
                     final_url = driver.current_url
                     h_final = urlunparse((
@@ -715,6 +717,7 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
                         rr.clicked_ok, rr.final_url, rr.note = False, final_url, "FINAL_URL_NOT_MATCH"
 
                     # 자식 탭은 닫고 부모로 복귀
+                    '''
                     if child_handle:
                         try:
                             driver.close()
@@ -724,7 +727,7 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str = "0"):
                             driver.switch_to.window(parent_handle)
                         except:
                             pass
-
+                    '''
                     break
 
                 if page < MAX_PAGES:
