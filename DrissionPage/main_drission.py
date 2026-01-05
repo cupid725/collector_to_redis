@@ -498,13 +498,69 @@ def _video_stream_state(page):
         return None
 
 
+def ensure_video_playing(page, slot_index):
+    """
+    비디오가 일시정지되었는지 확인하고 재생 상태 유지
+    """
+    try:
+        state = page.run_js("""
+            const v = document.querySelector('video');
+            if (!v) return null;
+            return {
+                paused: v.paused,
+                ended: v.ended,
+                currentTime: v.currentTime,
+                duration: v.duration
+            };
+        """)
+        
+        if state and state.get('paused') and not state.get('ended'):
+            print(f"[Slot-{slot_index}] ⚠️ 영상 일시정지 감지 → 재생 재개")
+            page.run_js("""
+                const v = document.querySelector('video');
+                if (v && v.paused) {
+                    v.play().catch(e => console.log('Play failed:', e));
+                }
+            """)
+            return True
+        return False
+    except Exception as e:
+        print(f"[Slot-{slot_index}] ⚠️ 재생 상태 확인 실패: {str(e)[:100]}")
+        return False
 
+
+def keep_browser_focused(page, slot_index):
+    """
+    브라우저 윈도우를 포커스하고 최상위로 유지
+    """
+    try:
+        # 윈도우를 최상위로 가져오기
+        page.run_js("""
+            window.focus();
+            if (document.hidden) {
+                document.dispatchEvent(new Event('visibilitychange'));
+            }
+        """)
+        
+        # 비디오에 포커스 이벤트 트리거
+        page.run_js("""
+            const v = document.querySelector('video');
+            if (v) {
+                v.dispatchEvent(new Event('focus'));
+                // 자동재생 정책 우회를 위한 사용자 제스처 시뮬레이션
+                v.muted = false;
+            }
+        """)
+        return True
+    except Exception as e:
+        print(f"[Slot-{slot_index}] ⚠️ 포커스 유지 실패: {str(e)[:100]}")
+        return False
 # ========================================
 # ✅ monitor_service 함수 수정 (핵심)
 # ========================================
 
 def monitor_service_optimized(url, proxy, slot_index, stop_event, r):
-    """프록시 최적화 버전 - 재시도 로직 추가"""
+    """프록시 최적화 버전 - 재생 중단 방지 로직 추가"""
     import time
     import random
     from stealth_browser import StealthMobileBrowser
@@ -541,31 +597,26 @@ def monitor_service_optimized(url, proxy, slot_index, stop_event, r):
         page = browser_wrapper.page
         print(f"[Slot-{slot_index}] ✨ 브라우저 초기화 완료")
 
-        # 3) ✅ 페이지 로드 - 재시도 로직 적용
+        # 3) 페이지 로드
         print(f"[Slot-{slot_index}] 🌐 타겟 접속 시작: {url}")
         if not retry_page_load(page, url, slot_index):
-            print(f"[Slot-{slot_index}] ❌ [FAIL] 페이지 로드 실패 (재시도 소진)")
+            print(f"[Slot-{slot_index}] ❌ [FAIL] 페이지 로드 실패")
             return
         
-        # 3-1) ✅ DOM 기본 로드 확인 (빈 페이지 방지)
+        # 4) DOM 로드 확인
         print(f"[Slot-{slot_index}] 📄 DOM 로드 확인 중...")
         if not wait_until_dom_not_empty(page, timeout=30, min_html_len=1000):
-            print(f"[Slot-{slot_index}] ⚠️ DOM이 비어있거나 너무 작음 - 진행 시도")
+            print(f"[Slot-{slot_index}] ⚠️ DOM이 비어있거나 너무 작음")
 
-        # 4) ✅ 진짜 대기 - 여기서만 모든 검증 수행
+        # 5) 페이지 준비 대기
         print(f"[Slot-{slot_index}] ⏳ 페이지 렌더링 대기 중...")
-        ok, reason = _wait_youtube_shorts_ready(page, slot_index, timeout_sec=240)  # 120 → 180초
+        ok, reason = _wait_youtube_shorts_ready(page, slot_index, timeout_sec=240)
 
         if not ok:
             print(f"[Slot-{slot_index}] ❌ [FAIL] 준비 실패: {reason}")
-            try:
-                print(f"[Slot-{slot_index}] 📊 최종 URL: {page.url}")
-                print(f"[Slot-{slot_index}] 📊 HTML 길이: {len(page.html or '')}")
-            except:
-                pass
             return
 
-        # 5) 최종 URL 검증
+        # 6) 최종 URL 검증
         try:
             cur = page.url
             if ("youtube.com" not in cur) or ("/shorts/" not in cur):
@@ -576,7 +627,12 @@ def monitor_service_optimized(url, proxy, slot_index, stop_event, r):
             print(f"[Slot-{slot_index}] ❌ [FAIL] URL 접근 불가")
             return
 
-        # 6) 체류 및 액션 시퀀스
+        # 7) ✅ 초기 포커스 설정 및 재생 확인
+        keep_browser_focused(page, slot_index)
+        time.sleep(1)
+        ensure_video_playing(page, slot_index)
+
+        # 8) 체류 및 액션 시퀀스
         fixed_action_time = 40
         base_stay = random.randint(45, 90)
         stay_time = base_stay + fixed_action_time
@@ -584,6 +640,10 @@ def monitor_service_optimized(url, proxy, slot_index, stop_event, r):
 
         human_handler = MobileHumanEvent(page)
         action_performed = False
+        
+        # ✅ 재생 상태 모니터링 주기 설정
+        last_play_check = time.time()
+        play_check_interval = 5  # 5초마다 재생 상태 확인
 
         print(f"[Slot-{slot_index}] ▶️ 재생 확인. {stay_time}초 시청 루프 시작.")
 
@@ -599,10 +659,27 @@ def monitor_service_optimized(url, proxy, slot_index, stop_event, r):
 
             elapsed = int(time.time() - stay_start)
 
+            # ✅ 주기적으로 재생 상태 확인 및 포커스 유지
+            if time.time() - last_play_check >= play_check_interval:
+                if ensure_video_playing(page, slot_index):
+                    # 일시정지가 감지되어 재생을 재개한 경우
+                    keep_browser_focused(page, slot_index)
+                last_play_check = time.time()
+
+            # 40초 시점 액션 수행
             if not action_performed and elapsed >= fixed_action_time:
                 print(f"\n[Slot-{slot_index}] 🔥 [ACTION] 40초 도달! 랜덤 액션 수행")
+                
+                # ✅ 액션 전 포커스 확보
+                keep_browser_focused(page, slot_index)
+                time.sleep(0.5)
+                
                 human_handler.execute_random_action()
                 action_performed = True
+
+                # ✅ 액션 후 재생 상태 확인
+                time.sleep(1)
+                ensure_video_playing(page, slot_index)
 
                 post_delay = random.uniform(8.0, 12.0)
                 print(f"[Slot-{slot_index}] 💤 추가 대기 {post_delay:.1f}초 후 세션 종료.")
