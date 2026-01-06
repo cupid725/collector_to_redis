@@ -835,7 +835,8 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str, r: redis.Redis):
             
             ##########################################################
             # 검색 결과 페이지 대기
-            time.sleep(3)
+            page.wait.ele_displayed('tag:body', timeout=30)
+            #time.sleep(3) 
             current_url = page.url
             if "search.naver.com" not in current_url:
                 raise Exception("검색 결과 페이지로 이동하지 못함")
