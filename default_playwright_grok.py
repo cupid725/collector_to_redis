@@ -9,8 +9,8 @@ from playwright.sync_api import sync_playwright
 # 사용자 설정
 # =========================
 TARGET_URL = "https://www.naver.com"
-
-PROXY = None  # "http://5.75.198.72:80"
+TARGET_URL = "https://bot.sannysoft.com"
+PROXY = "http://154.3.236.202:3128"
 
 
 def parse_proxy(proxy_url: str) -> dict:
