@@ -8,3 +8,7 @@
 /_tmp_profiles/
 /DrissionPage/browser_temp/
 /DrissionPage/__pycache__/
+DrissionPage/naver_monitor_out/results.csv
+DrissionPage/naver_monitor_out/results.jsonl
+__pycache__/live_human_events.cpython-310.pyc
+

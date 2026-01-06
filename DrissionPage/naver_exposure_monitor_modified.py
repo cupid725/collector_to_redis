@@ -38,11 +38,12 @@ ENABLE_WINDOW_POSITION = True
 WINDOW_POS_X = 50
 WINDOW_POS_Y = 400
 ENABLE_BLOCK_CHECK = False
-CHECK_INTERVAL_SECONDS = 60*30
+CHECK_INTERVAL_SECONDS = 60
 MAX_PAGES = 10
 
 TASKS = [
-    {"keyword": "올빼미티비", "domain": "https://www.tvda.co.kr/?srt=1"},
+    #{"keyword": "올빼미티비", "domain": "https://www.tvda.co.kr/?srt=1"},
+    {"keyword": "블랑티비", "domain": "https://www.flyingobjectives.co.kr/rank/"},
 ]
 
 MAX_PROXIES_PER_TASK = 30
@@ -138,12 +139,12 @@ PLAYWRIGHT_DEVICES = get_playwright_devices()
 # =============================================================================
 REGION_PROFILES = {}
 try:
-    if os.path.exists('region_profiles_mobile.json'):
-        with open('region_profiles_mobile.json', 'r', encoding='utf-8') as f:
+    if os.path.exists(r".\DrissionPage\region_profiles_mobile.json"):
+        with open(r".\DrissionPage\region_profiles_mobile.json", 'r', encoding='utf-8') as f:
             REGION_PROFILES = json.load(f)
         print(f"✅ 지역 프로필 로드 완료 ({len(REGION_PROFILES)}개 지역)")
     else:
-        print("⚠️ region_profiles_mobile.json 파일이 없습니다. 기본 설정 사용")
+        print("⚠️ .\DrissionPage\region_profiles_mobile.json 파일이 없습니다. 기본 설정 사용")
         REGION_PROFILES = {
             "KR": {
                 "locale": "ko-KR",
@@ -503,6 +504,7 @@ def return_proxy_to_redis(r: redis.Redis, proxy: ProxyInfo):
         logging.warning(f"⚠️ 프록시 반납 실패: {e}")
 
 def tcp_quick_check(addr: str, timeout: float = 2.0) -> bool:
+    return True
     try:
         host, port_s = addr.split(":", 1)
         port = int(port_s)
@@ -755,6 +757,8 @@ def get_with_newtab_check(page, url, page_timeout, watch_sec=2.0):
 
     page.get(url, timeout=page_timeout)
 
+    page.wait.ele_displayed('tag:body', timeout=page_timeout)
+    
     # get() 이후 잠깐 감시: 새 탭이 뜨는지 확인
     end = time.time() + watch_sec
     while time.time() < end:
@@ -792,11 +796,11 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str, r: redis.Redis):
 
     try:
         # 1. TCP 체크 및 내 IP 유출 검사
-        if not tcp_quick_check(proxy.address):
-            logging.warning(f"❌ TCP 연결 실패: {proxy.address}")
-            rr.error = "TCP_CONNECT_FAIL"
+        #if not tcp_quick_check(proxy.address):
+        #    logging.warning(f"❌ TCP 연결 실패: {proxy.address}")
+        #    rr.error = "TCP_CONNECT_FAIL"
 
-        elif is_proxy_leaking_my_ip(proxy, MY_PUBLIC_IP):
+        if is_proxy_leaking_my_ip(proxy, MY_PUBLIC_IP):
             logging.warning(f"❌ 프록시 거부 (내 공인 IP 노출됨): {proxy.address}")
             rr.error = "IP_LEAK_DETECTED"
 
@@ -815,7 +819,7 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str, r: redis.Redis):
             time.sleep(2)
 
             random_delay(1.5, 3.0)
-            #simulate_scroll(page, scroll_count=2)
+            simulate_scroll(page, scroll_count=2)
             #page.actions.click('#MM_SEARCH_FAKE').click('#query').type('테스트').key_down(Keys.ENTER).key_up(Keys.ENTER)
             ##########################################################
             page.actions.click('#MM_SEARCH_FAKE').click('#query')

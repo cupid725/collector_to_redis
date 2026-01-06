@@ -73,6 +73,7 @@ TARGET_URL = "https://www.youtube.com/shorts/u7sO-mNEpT4?feature=share"
 TARGET_URL1 = "https://youtube.com/shorts/-vVnZoVtnFk?feature=share"
 TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
 TARGET_URL1 = "https://youtube.com/shorts/eewyMV23vXg?feature=share" #새해인사
+TARGET_URL = "https://www.naver.com"
 
 NUM_BROWSERS = 1 
 MOBILE_DEVICES_LIST = []
