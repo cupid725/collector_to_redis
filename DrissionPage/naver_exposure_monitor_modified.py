@@ -839,7 +839,8 @@ def thread_worker(task: Dict, proxy: ProxyInfo, slot_id: str, r: redis.Redis):
             #time.sleep(3) 
             current_url = page.url
             if "search.naver.com" not in current_url:
-                raise Exception("검색 결과 페이지로 이동하지 못함")
+                s = f"검색 결과 페이지로 이동하지 못함: {current_url}"
+                raise Exception(s)
             
             results_url = current_url
             random_delay(2.0, 4.0)
