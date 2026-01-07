@@ -42,7 +42,8 @@ PROXY = "154.3.236.202:3128"
 # PROXY = "socks5://host:port"
 
 TASKS = [
-    {"keyword": "올빼미티비", "domain": "https://www.tvda.co.kr/?srt=1"},
+    #{"keyword": "올빼미티비", "domain": "https://www.tvda.co.kr/?srt=1"},
+    {"keyword": "킹콩티비", "domain": "https://www.kingkonglive.co.kr"},
 ]
 
 
@@ -604,8 +605,10 @@ async def run_one_session(slot_id: int, args) -> None:
             cols = int(args.tile_cols) if args.tile_cols > 0 else max(1, args.slots)
             x = (slot_id % cols) * w
             y = (slot_id // cols) * h
+
             extra_args = [f"--window-size={w},{h}", f"--window-position={x},{y}"]
             log(f"[WIN] tile window pos=({x},{y}) size=({w},{h}) cols={cols}")
+
 
         browser = StealthPatchrightBrowser(
             proxy=local_proxy,

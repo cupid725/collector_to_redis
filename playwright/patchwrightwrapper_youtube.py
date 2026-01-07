@@ -36,25 +36,31 @@ async def check_bot_detected(page):
         
     return False
 
+
+
 async def handle_google_consent(page):
-    """Consent 페이지 처리 및 브레이크포인트"""
-    if "consent.youtube.com" in page.url or "google.com/consent" in page.url:
-        print(f"🚨 Consent 페이지 감지됨! URL: {page.url}")
-        print("🛠️  디버깅 브레이크포인트: 상태 확인 후 'c'를 입력하세요.")
-        breakpoint() 
+    if "consent" not in page.url:
+        return False
+
+    try:
+        # 1. 'save'를 수행하는 form 내부를 타겟팅 (도메인 로직상 고정)
+        save_form = page.locator("form[action*='/save']")
         
-        try:
-            consent_buttons = [
-                "button[aria-label*='Accept']", "button[aria-label*='agree']",
-                "form[action*='consent'] button", "button:has-text('동의')", "button:has-text('모두 동의')"
-            ]
-            for selector in consent_buttons:
-                button = page.locator(selector).first
-                if await button.is_visible(timeout=3000):
-                    await button.click()
-                    await page.wait_for_load_state("networkidle")
-                    return True
-        except: pass
+        # 2. 그 폼 안에 있는 버튼 중 '제출' 역할을 하는 버튼 찾기
+        # 버튼 텍스트나 jsname에 의존하지 않고 HTML 표준 속성만 사용
+        consent_button = save_form.locator("button, input[type='submit']").last
+        
+        # 3. 발견 시 스크롤 및 클릭
+        await consent_button.scroll_into_view_if_needed()
+        await asyncio.sleep(1)
+        
+        print(f"🔘 동의 폼 제출 버튼 클릭 시도")
+        await consent_button.click(force=True)
+        
+        await page.wait_for_load_state("networkidle", timeout=10000)
+        return True
+    except Exception as e:
+        print(f"⚠️ Consent 실패: {e}")
     return False
 
 async def run_single_task(task_id):
@@ -73,7 +79,7 @@ async def run_single_task(task_id):
     lease_client = RedisProxyLeaseClient(config=REDIS_CONFIG)
     lease_client.connect()
     proxy_url = lease_client.claim(lease_seconds=300)
-    
+    #proxy_url =  "socks5://194.163.167.32:1080"
     if not proxy_url:
         print(f"[{task_id}] ❌ 사용 가능한 프록시 없음")
         lease_client.close()
@@ -101,14 +107,14 @@ async def run_single_task(task_id):
             try:
                 response = await page.goto(
                     TARGET_URL, 
-                    wait_until="commit", # 데이터가 오기 시작하면 바로 제어권 획득
+                    wait_until="domcontentloaded", # 데이터가 오기 시작하면 바로 제어권 획득
                     timeout=60000*3,
                     referer=random.choice(profile["referers"])
                 )
                 
                 # 4. 바디 태그가 나타날 때까지 대기 (봇 감지 페이지 확인용)
                 # 봇 감지 페이지는 구조가 단순해서 매우 빨리 뜹니다.
-                await page.wait_for_selector("body", timeout=10000)
+                await page.wait_for_selector("body", timeout=1000*60)
                 await asyncio.sleep(5) # 리다이렉트 대기 시간
                 
             except Exception as e:
@@ -131,7 +137,7 @@ async def run_single_task(task_id):
             # response 변수가 할당되었는지 확인 후 상태 체크
             if response and response.status < 400:
                 print(f"[{task_id}] ✅ 성공")
-                await asyncio.sleep(10)
+                await asyncio.sleep(80) # 60초 동안 브라우저 유지 및 시청
                 session_ok = True
             else:
                 print(f"[{task_id}] ❌ 실패 (Status: {response.status if response else 'N/A'})")
