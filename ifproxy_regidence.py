@@ -13,7 +13,7 @@ from collections import Counter
 #PROXY = "socks5://37.18.73.60:5566"
 #PROXY = "socks5://84.54.227.27:1080"
 #PROXY = "socks5://185.54.178.193:1080"
-PROXY = "socks5://203.25.208.163:1100"
+PROXY = "http://101.255.166.134:1111"
 #PROXY = "socks4://187.86.153.254:30660" ## 러시아
 #PROXY = "socks5://128.140.76.145:23822"
 # 같은 프록시로 몇 번 테스트할지

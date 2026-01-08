@@ -25,6 +25,7 @@ class StealthPatchrightBrowser:
     - 모바일/PC 모드에 따라 Playwright devices에서 랜덤 디바이스 선택
         - mobile=True  => Android 디바이스만 랜덤
         - mobile=False => Windows 디바이스만 랜덤
+    - window_position으로 브라우저 창 위치 지정 가능 (x, y)
     """
 
     def __init__(
@@ -41,6 +42,7 @@ class StealthPatchrightBrowser:
         mobile: bool = False,
         locale: str = "en-US",
         timezone_id: str = "America/New_York",
+        window_position: Optional[Dict[str, int]] = None,  # ✅ 추가: {"x": 10, "y": 10}
     ):
         self.chrome_exe = chrome_exe
         self.proxy = proxy
@@ -49,6 +51,7 @@ class StealthPatchrightBrowser:
 
         self.locale = locale
         self.timezone_id = timezone_id
+        self.window_position = window_position  # ✅ 저장
 
         # 모바일 디바이스를 고를 때는 viewport를 device descriptor가 제공하므로 no_viewport=False가 더 안전
         self.no_viewport = False if mobile else no_viewport
@@ -216,11 +219,17 @@ class StealthPatchrightBrowser:
             "--no-sandbox",
         ]
 
+        # ✅ window_position이 지정되면 --window-position 추가
+        if self.window_position and "x" in self.window_position and "y" in self.window_position:
+            x = self.window_position["x"]
+            y = self.window_position["y"]
+            args.append(f"--window-position={x},{y}")
+            print(f"🪟 브라우저 창 위치: ({x}, {y})")
+
         # 데스크톱 모드에선 창 크기/위치 제어를 위해 최대화 플래그를 유지
         # (모바일 모드에선 viewport/UA를 디바이스 디스크립터로 맞추는게 중요하므로 제외)
         if not self.mobile:
             args.append("--start-maximized")
-
 
         if self.webrtc_leak_protection:
             args += [
@@ -359,6 +368,7 @@ async def main():
         headless=args.headless,
         mobile=args.mobile,
         cleanup_user_data_dir=not args.keep_profile,
+        window_position={"x": 100, "y": 100},  # ✅ 사용 예시
     )
 
     async with browser:
@@ -371,4 +381,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-'''    
+'''

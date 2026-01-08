@@ -4,9 +4,14 @@ import random
 from pathlib import Path
 from redis_proxy_lease import RedisProxyLeaseClient, RedisConnConfig
 from PatchrightWrapper import StealthPatchrightBrowser
+from patchright_human_events import HumanEvent, HumanEventMobile
 
 # 설정 상수
 TARGET_URL = "https://youtube.com/shorts/eewyMV23vXg?si=vtn1a6WMt0bDcDac"
+TARGET_URL = "https://youtube.com/shorts/u7sO-mNEpT4?si=-niEKY13Q38Nqq4W"
+
+TARGET_URL = "https://www.youtube.com/shorts/Rvp5UG95qjY?feature=share" #샘플
+
 REDIS_CONFIG = RedisConnConfig(host="127.0.0.1", port=6379)
 PROFILES_PATH = Path(__file__).parent / "region_profiles_mobile.json"
 
@@ -62,7 +67,52 @@ async def handle_google_consent(page):
     except Exception as e:
         print(f"⚠️ Consent 실패: {e}")
     return False
+####################################################################
+ERROR_BODY_MARKERS = (
+    "ERR_TIMED_OUT",
+    "ERR_TUNNEL_CONNECTION_FAILED",
+    "ERR_PROXY_CONNECTION_FAILED",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "This site can’t be reached",
+    "This site can't be reached",
+    "Proxy server is refusing connections",
+    "사이트에 연결할 수 없음",
+    "연결할 수 없습니다",
+    "프록시 서버에 문제가 있습니다",
+)
 
+async def _get_body_probe_text(page, *, limit: int = 20000) -> str:
+    """document.title + body.innerText 일부를 가져와 에러 페이지/문구 여부를 가볍게 판별."""
+    try:
+        js = f"""
+        () => {{
+            const title = document.title || "";
+            const body = document.body ? document.body.innerText : "";
+            const t = title + "\\n" + body;
+            return t.slice(0, {int(limit)});
+        }}
+        """
+        text = await page.evaluate(js)
+        return text if isinstance(text, str) else str(text)
+    except Exception:
+        return ""
+
+async def has_error_in_body(page) -> bool:
+    text = await _get_body_probe_text(page)
+    if not text:
+        return False
+    if "ERR_" in text:
+        return True
+    return any(m in text for m in ERROR_BODY_MARKERS)
+
+async def error_body_stable(page, *, confirm_delay_ms: int = 1200) -> bool:
+    """에러 문구가 '잠깐' 보이는 레이스를 줄이기 위해 2회 연속이면 안정적으로 에러로 판단."""
+    if not await has_error_in_body(page):
+        return False
+    await page.wait_for_timeout(confirm_delay_ms)
+    return await has_error_in_body(page)
+#####################################################################
 async def run_single_task(task_id):
     # 1. 지역 프로필 로드
     try:
@@ -79,7 +129,7 @@ async def run_single_task(task_id):
     lease_client = RedisProxyLeaseClient(config=REDIS_CONFIG)
     lease_client.connect()
     proxy_url = lease_client.claim(lease_seconds=300)
-    #proxy_url =  "socks5://194.163.167.32:1080"
+    #proxy_url =  "socks5://34.124.190.108:8080" #봇페이지 뜨는 프록시
     if not proxy_url:
         print(f"[{task_id}] ❌ 사용 가능한 프록시 없음")
         lease_client.close()
@@ -89,7 +139,7 @@ async def run_single_task(task_id):
 
     session_ok = False
     response = None # ⭐ 에러 방지를 위해 response 변수를 미리 None으로 초기화
-    
+    nav_ok = False
     try:
         browser = StealthPatchrightBrowser(
             proxy=proxy_url,
@@ -102,12 +152,13 @@ async def run_single_task(task_id):
 
         async with browser:
             page = await browser.new_page()
-            
+            bRaiseException = False
+            Exception_waittime = 60
             # 3. 접속 시도
             try:
                 response = await page.goto(
                     TARGET_URL, 
-                    wait_until="domcontentloaded", # 데이터가 오기 시작하면 바로 제어권 획득
+                    wait_until="commit", # 데이터가 오기 시작하면 바로 제어권 획득
                     timeout=60000*3,
                     referer=random.choice(profile["referers"])
                 )
@@ -119,24 +170,47 @@ async def run_single_task(task_id):
                 
             except Exception as e:
                 print(f"[{task_id}] ⚠️ 페이지 이동 중 예외: {e}")
+                bRaiseException = True
+                await asyncio.sleep(Exception_waittime) # 더 대기해본다.
+                
+            if "error" in page.url or  await error_body_stable(page, confirm_delay_ms=5000) :
+                print(f"🛑 [{task_id}] 이정도까지 기다려봤는데 안되면 실패처리하자.! (URL: {page.url})")
+                return False
+            else:
+                print(f"🛑 [{task_id}] 페이지 정상으로 열림 (URL: {page.url})")
+                nav_ok = True
 
-            # 5. 봇 탐지 우선 체크 (Body 로드 후)
+
+            # 5. Consent 체크
+            await handle_google_consent(page)
+            print(f"🛑 [{task_id}] consent 통과")
+          
+            
+            # 6. 봇 탐지 우선 체크 (Body 로드 후)
             if await check_bot_detected(page):
                 print(f"🛑 [{task_id}] 봇 의심 페이지 감지! (URL: {page.url})")
-                return False
-
-            # 6. Consent 체크
-            await handle_google_consent(page)
+                return False            
+            print(f"🛑 [{task_id}] 봇 탐지 통과")
             
             # 7. 최종 결과 확인
             try:
                 await page.wait_for_load_state("networkidle", timeout=15000)
             except:
                 pass
+            
+            await asyncio.sleep(40)
+            human_m = HumanEventMobile(page)
+            await human_m.execute_random_action()
+            print(f"🛑 [{task_id}] 휴면 동작 완료!")
 
             # response 변수가 할당되었는지 확인 후 상태 체크
-            if response and response.status < 400:
-                print(f"[{task_id}] ✅ 성공")
+            #if response and response.status < 400:
+            if nav_ok :
+                print(f"[{task_id}] ✅ 최종 성공")
+                if bRaiseException : #exception 발생했었으면 짧게 유지
+                    await asyncio.sleep(120-Exception_waittime)
+                else:
+                    await asyncio.sleep(120)
                 await asyncio.sleep(80) # 60초 동안 브라우저 유지 및 시청
                 session_ok = True
             else:
