@@ -29,6 +29,19 @@ slot_threads = [None] * SLOT_NUM
 slot_lock = threading.Lock()
 shutdown_event = threading.Event()  # 전역 종료 이벤트
 
+# ✅ 전역 성공 카운터 (쓰레드 모두 합산)
+success_lock = threading.Lock()
+total_success = 0
+
+
+def inc_success_and_print(task_id: str):
+    """모든 슬롯/쓰레드 합산 성공 카운트 + 콘솔 출력"""
+    global total_success
+    with success_lock:
+        total_success += 1
+        print(f"[{task_id}] ✅ GLOBAL SUCCESS +1  => total_success={total_success}")
+
+
 async def check_bot_detected(page):
     """봇 의심 페이지 감지 로직"""
     target_link_patterns = [
@@ -52,6 +65,7 @@ async def check_bot_detected(page):
         
     return False
 
+
 async def handle_google_consent(page):
     if "consent" not in page.url:
         return False
@@ -72,6 +86,7 @@ async def handle_google_consent(page):
         print(f"⚠️ Consent 실패: {e}")
     return False
 
+
 ERROR_BODY_MARKERS = (
     "ERR_TIMED_OUT",
     "ERR_TUNNEL_CONNECTION_FAILED",
@@ -84,6 +99,7 @@ ERROR_BODY_MARKERS = (
     "연결할 수 없습니다",
     "프록시 서버에 문제가 있습니다",
 )
+
 
 async def _get_body_probe_text(page, *, limit: int = 20000) -> str:
     try:
@@ -100,6 +116,7 @@ async def _get_body_probe_text(page, *, limit: int = 20000) -> str:
     except Exception:
         return ""
 
+
 async def has_error_in_body(page) -> bool:
     text = await _get_body_probe_text(page)
     if not text:
@@ -108,11 +125,13 @@ async def has_error_in_body(page) -> bool:
         return True
     return any(m in text for m in ERROR_BODY_MARKERS)
 
+
 async def error_body_stable(page, *, confirm_delay_ms: int = 1200) -> bool:
     if not await has_error_in_body(page):
         return False
     await page.wait_for_timeout(confirm_delay_ms)
     return await has_error_in_body(page)
+
 
 async def run_single_task(slot_id, task_count):
     """단일 작업 실행 (슬롯 ID와 작업 번호 포함)"""
@@ -242,6 +261,7 @@ async def run_single_task(slot_id, task_count):
     
     return session_ok
 
+
 def slot_worker(slot_id):
     """슬롯별 워커 쓰레드"""
     loop = asyncio.new_event_loop()
@@ -251,9 +271,14 @@ def slot_worker(slot_id):
     print(f"🎰 슬롯 {slot_id} 워커 시작!")
     
     while not shutdown_event.is_set():
+        task_id = f"S{slot_id}-T{task_count}"
         try:
             result = loop.run_until_complete(run_single_task(slot_id, task_count))
-            
+
+            # ✅ 성공 카운트(모든 쓰레드 합산)
+            if result is True:
+                inc_success_and_print(task_id)
+
             if result == "BROWSER_CLOSED":
                 print(f"\n🔄 슬롯 {slot_id} - 브라우저 닫힘 감지, 워커 종료\n")
                 break
@@ -275,6 +300,7 @@ def slot_worker(slot_id):
     loop.close()
     print(f"🎰 슬롯 {slot_id} 워커 종료됨")
 
+
 def manage_slot(slot_id):
     """슬롯 관리 - 워커 쓰레드가 종료되면 새로 시작"""
     while not shutdown_event.is_set():
@@ -294,6 +320,7 @@ def manage_slot(slot_id):
         print(f"🔄 슬롯 {slot_id} 워커 재시작 대기...\n")
         import time
         time.sleep(1)
+
 
 def start_all_slots():
     """모든 슬롯 매니저 시작"""
@@ -315,6 +342,7 @@ def start_all_slots():
     except KeyboardInterrupt:
         pass
 
+
 def signal_handler(signum, frame):
     """Ctrl+C 시그널 핸들러"""
     print("\n\n🛑 종료 시그널 수신! 모든 슬롯 종료 중...\n")
@@ -323,6 +351,7 @@ def signal_handler(signum, frame):
     time.sleep(2)
     print("✅ 프로그램 종료\n")
     sys.exit(0)
+
 
 if __name__ == "__main__":
     # Ctrl+C 시그널 핸들러 등록
