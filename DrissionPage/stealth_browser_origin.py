@@ -7,14 +7,13 @@ from DrissionPage import ChromiumPage, ChromiumOptions
 import config
 
 class StealthMobileBrowser:
-    def __init__(self, slot_index: int, profile: dict, proxy: str = None, devices_dict: dict = None, referer: str = None, window_position: dict = None):
+    def __init__(self, slot_index: int, profile: dict, proxy: str = None, devices_dict: dict = None, referer: str = None):
         self.slot_index = slot_index
         self.port = 15000 + slot_index
         self.profile = profile or {}
         self.proxy = proxy
         self.devices_dict = devices_dict
         self.referer = referer
-        self.window_position = window_position  # ✅ 윈도우 위치 저장
 
         self.base_path = os.path.dirname(os.path.abspath(__file__))
         self.temp_root = os.path.join(self.base_path, "browser_temp")
@@ -88,13 +87,6 @@ class StealthMobileBrowser:
         co.set_argument(f"--window-size={width},{height}")
         co.set_argument(f"--force-device-scale-factor={dpr}")
 
-        # ✅ 윈도우 위치 설정 (브라우저 시작 시)
-        if self.window_position:
-            x = self.window_position.get('x', 0)
-            y = self.window_position.get('y', 0)
-            co.set_argument(f"--window-position={x},{y}")
-            print(f"[Slot-{self.slot_index}] 📍 윈도우 시작 위치: x={x}, y={y}")
-
         if device.get("has_touch"):
             co.set_argument("--blink-settings=touchEventEnabled=true")
 
@@ -163,18 +155,6 @@ class StealthMobileBrowser:
         except Exception as e:
             print(f"[Slot-{self.slot_index}] ❌ 브라우저 생성 실패: {e}")
             raise
-
-        # ========================================
-        # ✅ 브라우저 생성 후 윈도우 위치 재설정 (보험)
-        # ========================================
-        if self.window_position:
-            try:
-                x = self.window_position.get('x', 0)
-                y = self.window_position.get('y', 0)
-                page.set.window.position(x, y)
-                print(f"[Slot-{self.slot_index}] ✅ 윈도우 위치 재설정: x={x}, y={y}")
-            except Exception as e:
-                print(f"[Slot-{self.slot_index}] ⚠️ 윈도우 위치 재설정 실패: {e}")
 
         # ========================================
         # ✅ CDP 최적화 설정 (프록시 환경)

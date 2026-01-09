@@ -62,7 +62,7 @@ SOURCES_1 = [
 ]
 
 SOURCES_2 = [
-    #("https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt", "socks5", False),
     ("https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt", "http", False),
     ("https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/http.txt", "http", False),
     ("https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt", "http", False),
@@ -72,9 +72,9 @@ SOURCES_2 = [
     ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/https/https.txt", "http", False),
     ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks4/socks4.txt", "socks4", False),
     ("https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5/socks5.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt", "http", False),
-    #("https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt", "socks4", False),
-    #("https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt", "socks5", False),    
+    ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt", "http", False),
+    ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt", "socks4", False),
+    ("https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt", "socks5", False),    
 ]
 
 SOURCES_3 = [
@@ -84,20 +84,20 @@ SOURCES_3 = [
     ("https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt", "http", False),
     ("https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt", "socks4", False),
     ("https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks5.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt", "http", False),
-    #("https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks4.txt", "socks4", False),
-    #("https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/http.txt", "http", True),
-    #("https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks4.txt", "socks4", True),
-    #("https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks5.txt", "socks5", True),
-    #("https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt", "http", False),
-    #("https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5", False),
-    #("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt", "http", False),
-    #("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt", "http", False),
+    ("https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks4.txt", "socks4", False),
+    ("https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/http.txt", "http", True),
+    ("https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks4.txt", "socks4", True),
+    ("https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/socks5.txt", "socks5", True),
+    ("https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt", "http", False),
+    ("https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5", False),
+    ("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/http.txt", "http", False),
+    ("https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/socks5.txt", "socks5", False),
 ]
 
 SOURCES = SOURCES_1
-ALL_SOURCES = SOURCES_1
+ALL_SOURCES = SOURCES_3 + SOURCES_2 + SOURCES_1
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 # ================= 3. SO_LINGER 주입 설정 =================
